@@ -1,0 +1,49 @@
+{
+  "name": "metacritic-ts",
+  "version": "1.0.0",
+  "description": "TypeScript library to extrapolate data from Metacritic.",
+  "main": "dist/index.js",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "keywords": [
+    "metacritic",
+    "games",
+    "api",
+    "typescript"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "test": "jest",
+    "test-coverage": "jest --coverage",
+    "prepare": "npm run build"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "author": "Deadlock-too",
+  "license": "MIT",
+  "type": "module",
+  "homepage": "https://githhub.com/Deadlock-too/metacritic-ts#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Deadlock-too/metacritic-ts.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Deadlock-too/metacritic-ts/issues"
+  },
+  "dependencies": {
+    "user-agents": "^1.1.481"
+  },
+  "devDependencies": {
+    "@types/jest": "^29.5.14",
+    "@types/user-agents": "^1.0.4",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.3.1",
+    "ts-node": "^10.9.2",
+    "tsup": "^8.4.0",
+    "typescript": "^5.8.3"
+  }
+}
