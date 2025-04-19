@@ -24,7 +24,7 @@ export type MetacriticEntry = {
   criticScore: Score
 }
 
-type Score = {
+export type Score = {
   score: number
   maxScore: number
   sentiment: string

@@ -1,6 +1,6 @@
 {
   "name": "metacritic-ts",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "TypeScript library to extrapolate data from Metacritic.",
   "main": "dist/index.js",
   "module": "dist/index.mjs",
