@@ -1,4 +1,5 @@
 # metacritic-ts
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Deadlock-too/metacritic-ts)
 [![GitHub](https://img.shields.io/github/license/Deadlock-too/metacritic-ts)](https://github.com/Deadlock-too/metacritic-ts)
 [![npm](https://img.shields.io/npm/v/metacritic-ts)](https://www.npmjs.com/package/metacritic-ts)
 [![npm](https://img.shields.io/npm/dt/metacritic-ts)](https://www.npmjs.com/package/metacritic-ts)
