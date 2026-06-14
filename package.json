@@ -34,9 +34,6 @@
   "bugs": {
     "url": "https://github.com/Deadlock-too/metacritic-ts/issues"
   },
-  "dependencies": {
-    "user-agents": "^1.1.481"
-  },
   "devDependencies": {
     "@types/jest": "^29.5.14",
     "@types/user-agents": "^1.0.4",

@@ -1,5 +1,4 @@
 import { parseDetailJsonResult, parseSearchJsonResult } from './parser'
-import UserAgent from 'user-agents'
 import { MetacriticEntry, RecordType, MetacriticSearchEntry } from './types'
 
 class SearchInformations {
@@ -26,6 +25,14 @@ export class MetacriticService {
   static HOMEPAGE_URL = 'https://www.metacritic.com/'
   static BASE_URL = 'https://backend.metacritic.com/composer/metacritic/pages/'
   static SEARCH_URL = MetacriticService.BASE_URL + 'search/'
+
+  static USER_AGENTS = [
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:127.0) Gecko/20100101 Firefox/127.0',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15',
+  ]
 
   constructor(minSimilarity: number = 0.5) {
     this.minSimilarity = minSimilarity
@@ -156,7 +163,7 @@ export class MetacriticService {
   }
 
   static getMinimalRequestHeaders() {
-    const userAgent = new UserAgent()
+    const userAgent = MetacriticService.USER_AGENTS[Math.floor(Math.random() * MetacriticService.USER_AGENTS.length)]
     return {
       'User-Agent': userAgent.toString(),
     }
