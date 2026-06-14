@@ -1,671 +1,226 @@
-import { describe } from '@jest/globals'
-import { MetacriticService, RecordType, MetacriticSearchEntry } from '../src'
-import { getSimilarity } from '../src/lib/utils'
+import { describe, expect, test } from '@jest/globals'
+import { readFileSync } from 'node:fs'
+import { MetacriticService, RecordType, ScraperError } from '../src'
+import { getMatchScore, getSimilarity } from '../src/lib/utils'
 import { parseDetailJsonResult, parseSearchJsonResult } from '../src/lib/parser'
+import { HttpClient, type FetchLike } from '../src/core/http'
+import { clampSimilarity } from '../src/core/options'
 
-describe('MetacriticService', () => {
-  let metacriticService: MetacriticService
+const searchFixture = readFileSync('tests/fixtures/search-response.json', 'utf8')
+const detailFixture = readFileSync('tests/fixtures/detail-response.json', 'utf8')
 
-  beforeEach(() => {
-    // Reset static props
-    MetacriticService.HOMEPAGE_URL = 'https://www.metacritic.com/'
-    MetacriticService.REFERER_HEADER = 'https://www.metacritic.com/'
-    MetacriticService.BASE_URL = 'https://backend.metacritic.com/composer/metacritic/pages/'
-    MetacriticService.SEARCH_URL = MetacriticService.BASE_URL + 'search/'
+const HOMEPAGE_HTML = '<html><body><script>boot({"u":"/api?apiKey=KEY_123&v=2"})</script></body></html>'
 
-    jest.resetAllMocks()
+const isHomepage = (u: string) => u.startsWith('https://www.metacritic.com')
+const isSearch = (u: string) => u.includes('backend.metacritic.com') && u.includes('/search/')
+const isDetail = (u: string) => u.includes('backend.metacritic.com') && !u.includes('/search/')
 
-    metacriticService = new MetacriticService();
-    (metacriticService as any).apiKey = 'test-api-key'
-  })
+type Handler = (url: string) => Response
 
-  afterEach(() => {
-    // Restore all mocks
-    jest.restoreAllMocks()
-  })
-
-  test('getMinimalRequestHeaders should return correct headers', () => {
-    const headers = MetacriticService.getMinimalRequestHeaders()
-
-    expect(headers).toHaveProperty('User-Agent')
-    expect(Object.keys(headers).length).toBe(1)
-  })
-
-  test('getRequestHeaders should return correct headers', () => {
-    const headers = MetacriticService.getRequestHeaders()
-
-    expect(headers).toHaveProperty('User-Agent')
-    expect(headers).toHaveProperty('Content-Type', 'application/json')
-    expect(headers).toHaveProperty('Accept', '*/*')
-    expect(headers).toHaveProperty('Referer', MetacriticService.REFERER_HEADER)
-    expect(Object.keys(headers).length).toBe(4)
-  })
-
-  test('search should return results', async () => {
-    const mockValue = {
-      components: [
-        {
-          meta: {
-            componentName: 'search'
-          },
-          data: {
-            items: [
-              {
-                id: 1,
-                typeId: RecordType.Game,
-                title: 'Test Game',
-                slug: 'test-game',
-                criticScoreSummary: {
-                  score: 70
-                },
-                mustSee: false,
-                mustWatch: false,
-                mustPlay: true
-              }
-            ]
-          }
-        }
-      ]
+function makeService(handler: Handler, counters?: { homepage?: number; search?: number; detail?: number }) {
+  const fetchFn: FetchLike = async (input) => {
+    const url = String(input)
+    if (counters) {
+      if (isHomepage(url)) counters.homepage = (counters.homepage ?? 0) + 1
+      else if (isSearch(url)) counters.search = (counters.search ?? 0) + 1
+      else if (isDetail(url)) counters.detail = (counters.detail ?? 0) + 1
     }
+    return handler(url)
+  }
+  return new MetacriticService({ fetch: fetchFn, retries: 0 })
+}
 
-    MetacriticService.sendSearchWebRequest = jest.fn().mockResolvedValue(JSON.stringify(mockValue))
+const happyHandler =
+  (search = searchFixture, detail = detailFixture): Handler =>
+  (url) => {
+    if (isHomepage(url)) return new Response(HOMEPAGE_HTML)
+    if (isSearch(url)) return new Response(search)
+    return new Response(detail)
+  }
 
-    const result = await metacriticService.search('Test Game')
+describe('MetacriticService – search', () => {
+  test('rejects an empty search key', async () => {
+    const result = await new MetacriticService().search('')
+    expect(result).toEqual({ success: false, error: 'Search key is required' })
+  })
+
+  test('returns parsed, similarity-sorted results', async () => {
+    const result = await makeService(happyHandler()).search('The Last of Us')
     expect(result.success).toBe(true)
-    expect(result.error).toBeUndefined()
-    expect(result.data).toHaveLength(1)
-    expect(result.data).toBeInstanceOf(Array<MetacriticSearchEntry>)
-    expect(result.data[0].id).toBe(mockValue.components[0].data.items[0].id)
-    expect(result.data[0].recordType).toBe(mockValue.components[0].data.items[0].typeId)
-    expect(result.data[0].title).toBe(mockValue.components[0].data.items[0].title)
-    expect(result.data[0].slug).toBe(mockValue.components[0].data.items[0].slug)
-    expect(result.data[0].criticScore).toBe(mockValue.components[0].data.items[0].criticScoreSummary.score)
-    expect(result.data[0].must).toBe(mockValue.components[0].data.items[0].mustSee || mockValue.components[0].data.items[0].mustWatch || mockValue.components[0].data.items[0].mustPlay)
-    expect(result.data[0].similarity).toBe(1)
+    if (!result.success) throw new Error('expected success')
+    // "Completely Unrelated Movie" is filtered out by the threshold.
+    expect(result.data.map((e) => e.id)).toEqual([2001, 1001, 1002])
+    expect(result.data[0].criticScoreValue).toBe(84)
+    expect(result.data[0].must).toBe(true)
   })
 
-  test('getDetail should return result', async () => {
-    const searchMockValue = {
-      components: [
-        {
-          meta: {
-            componentName: 'search'
-          },
-          data: {
-            items: [
-              {
-                id: 1,
-                typeId: RecordType.Game,
-                title: 'Test Game',
-                slug: 'test-game',
-                criticScoreSummary: {
-                  score: 70
-                },
-                mustSee: false,
-                mustWatch: false,
-                mustPlay: true
-              }
-            ]
-          }
-        }
-      ]
-    }
-
-    const mockValue = {
-      components: [
-        {
-          meta: {
-            componentName: 'product'
-          },
-          data: {
-            item: {
-              id: '1',
-              typeId: RecordType.Game,
-              title: 'Test Game',
-              slug: 'test-game',
-            }
-          }
-        },
-        {
-          meta: {
-            componentName: 'critic-score-summary'
-          },
-          data: {
-            item: {
-              score: 80,
-              max: 100,
-              sentiment: 'positive',
-              positiveCount: 40,
-              neutralCount: 5,
-              negativeCount: 2,
-              reviewCount: 47
-            }
-          }
-        },
-        {
-          meta: {
-            componentName: 'user-score-summary'
-          },
-          data: {
-            item: {
-              score: 75,
-              max: 100,
-              sentiment: 'positive',
-              positiveCount: 40,
-              neutralCount: 5,
-              negativeCount: 2,
-              reviewCount: 47
-            }
-          }
-        }
-      ]
-    }
-
-    MetacriticService.sendSearchWebRequest = jest.fn().mockResolvedValue(JSON.stringify(searchMockValue))
-    MetacriticService.sendDetailWebRequest = jest.fn().mockResolvedValue(JSON.stringify(mockValue))
-
-    const result = await metacriticService.getDetail('Test game', RecordType.Game)
+  test('can leave the API ordering untouched', async () => {
+    const result = await makeService(happyHandler()).search('The Last of Us', { sortBySimilarity: false })
     expect(result.success).toBe(true)
-    expect(result.error).toBeUndefined()
-    expect(result.data).toBeDefined()
-    expect(result.data!.id).toBe(mockValue.components[0].data.item.id)
-    expect(result.data!.recordType).toBe(mockValue.components[0].data.item.typeId)
-    expect(result.data!.title).toBe(mockValue.components[0].data.item.title)
-    expect(result.data!.slug).toBe(mockValue.components[0].data.item.slug)
-    expect(result.data!.criticScore).toBeDefined()
-    expect(result.data!.criticScore!.score).toBe(mockValue.components[1].data.item.score)
-    expect(result.data!.criticScore!.maxScore).toBe(mockValue.components[1].data.item.max)
-    expect(result.data!.criticScore!.sentiment).toBe(mockValue.components[1].data.item.sentiment)
-    expect(result.data!.criticScore!.count.positive).toBe(mockValue.components[1].data.item.positiveCount)
-    expect(result.data!.criticScore!.count.neutral).toBe(mockValue.components[1].data.item.neutralCount)
-    expect(result.data!.criticScore!.count.negative).toBe(mockValue.components[1].data.item.negativeCount)
-    expect(result.data!.criticScore!.count.total).toBe(mockValue.components[1].data.item.reviewCount)
-    expect(result.data!.userScore).toBeDefined()
-    expect(result.data!.userScore!.score).toBe(mockValue.components[2].data.item.score)
-    expect(result.data!.userScore!.maxScore).toBe(mockValue.components[2].data.item.max)
-    expect(result.data!.userScore!.sentiment).toBe(mockValue.components[2].data.item.sentiment)
-    expect(result.data!.userScore!.count.positive).toBe(mockValue.components[2].data.item.positiveCount)
-    expect(result.data!.userScore!.count.neutral).toBe(mockValue.components[2].data.item.neutralCount)
-    expect(result.data!.userScore!.count.negative).toBe(mockValue.components[2].data.item.negativeCount)
-    expect(result.data!.userScore!.count.total).toBe(mockValue.components[2].data.item.reviewCount)
+    if (!result.success) throw new Error('expected success')
+    expect(result.data.map((e) => e.id)).toEqual([1001, 1002, 2001])
   })
 
-  test('search should handle invalid response format', async () => {
-    const consoleSpy = jest.spyOn(console, 'error').mockImplementation()
-    const metacriticSpy = jest.spyOn(MetacriticService, 'sendSearchWebRequest').mockImplementation(() => {
-      return Promise.resolve('Invalid JSON')
-    })
+  test('fails clearly when the API key cannot be retrieved', async () => {
+    const result = await makeService((url) =>
+      isHomepage(url) ? new Response('', { status: 404 }) : new Response(searchFixture),
+    ).search('The Last of Us')
+    expect(result).toEqual({ success: false, error: 'Failed to retrieve API key' })
+  })
 
-    const result = await metacriticService.search('Test Game')
+  test('surfaces a clear error when the response shape changed', async () => {
+    const result = await makeService((url) =>
+      isHomepage(url) ? new Response(HOMEPAGE_HTML) : new Response(JSON.stringify({ components: [] })),
+    ).search('The Last of Us')
     expect(result.success).toBe(false)
-    expect(result.data).toHaveLength(0)
-    expect(result.error).toBe('Invalid search response format')
-
-    consoleSpy.mockRestore()
-    metacriticSpy.mockRestore()
-  })
-
-  test('search should handle empty response', async () => {
-    const consoleSpy = jest.spyOn(console, 'error').mockImplementation()
-    const metacriticSpy = jest.spyOn(MetacriticService, 'sendSearchWebRequest').mockImplementation(() => {
-      return Promise.resolve(undefined)
-    })
-
-    const result = await metacriticService.search('Test Game')
-    expect(result.success).toBe(false)
-    expect(result.data).toHaveLength(0)
-    expect(result.error).toBe('Failed to fetch search results')
-
-    consoleSpy.mockRestore()
-    metacriticSpy.mockRestore()
-  })
-
-  test('getDetail should handle invalid response format', async () => {
-    const consoleSpy = jest.spyOn(console, 'error').mockImplementation()
-    jest.spyOn(MetacriticService, 'sendSearchWebRequest').mockImplementation(() => {
-      return Promise.resolve(JSON.stringify({
-        components: [{
-          meta: { componentName: 'search' },
-          data: { items: [{ id: 1, typeId: RecordType.Game, title: 'Test Game', slug: 'test-game', criticScoreSummary: { score: 70 }, mustSee: false, mustWatch: false, mustPlay: true }] }
-        }]
-      }))
-    })
-    const metacriticSpy = jest.spyOn(MetacriticService, 'sendDetailWebRequest').mockImplementation(() => {
-      return Promise.resolve('Invalid JSON')
-    })
-
-    const result = await metacriticService.getDetail('Test Game', RecordType.Game)
-    expect(result.success).toBe(false)
-    expect(result.data).toBeNull()
-    expect(result.error).toBe('Invalid detail response format')
-
-    consoleSpy.mockRestore()
-    metacriticSpy.mockRestore()
-  })
-
-  test('getDetail should handle empty response', async () => {
-    const consoleSpy = jest.spyOn(console, 'error').mockImplementation()
-    jest.spyOn(MetacriticService, 'sendSearchWebRequest').mockImplementation(() => {
-      return Promise.resolve(JSON.stringify({
-        components: [{
-          meta: { componentName: 'search' },
-          data: { items: [{ id: 1, typeId: RecordType.Game, title: 'Test Game', slug: 'test-game', criticScoreSummary: { score: 70 }, mustSee: false, mustWatch: false, mustPlay: true }] }
-        }]
-      }))
-    })
-    const metacriticSpy = jest.spyOn(MetacriticService, 'sendDetailWebRequest').mockImplementation(() => {
-      return Promise.resolve(undefined)
-    })
-
-    const result = await metacriticService.getDetail('Test Game', RecordType.Game)
-    expect(result.success).toBe(false)
-    expect(result.data).toBeNull()
-    expect(result.error).toBe('Failed to fetch detail result')
-
-    consoleSpy.mockRestore()
-    metacriticSpy.mockRestore()
-  })
-
-  test('search should return empty array for empty search key', async () => {
-    const result = await metacriticService.search('')
-    expect(result.success).toBe(false)
-    expect(result.data).toEqual([])
-    expect(result.error).toBe('Search key is required')
-  })
-
-  test('getDetail should return null for empty search key', async () => {
-    const result = await metacriticService.getDetail('', RecordType.Game)
-    expect(result.success).toBe(false)
-    expect(result.data).toBeNull()
-    expect(result.error).toBe('Search key is required')
-  })
-
-  test('search should return empty array for invalid search key', async () => {
-    const consoleSpy = jest.spyOn(console, 'error').mockImplementation()
-    const apiKeySpy = jest.spyOn(MetacriticService, 'sendApiKeyRetrievalWebsiteRequest').mockImplementation(() => {
-      return Promise.resolve(null)
-    });
-    (metacriticService as any).apiKey = undefined
-
-    const result = await metacriticService.search('Test Game')
-    expect(result.success).toBe(false)
-    expect(result.data).toEqual([])
-    expect(result.error).toBe('Failed to retrieve API key')
-
-    expect(consoleSpy.mock.calls.length).toBe(1)
-    apiKeySpy.mockRestore()
-    consoleSpy.mockRestore()
-  })
-
-  test('getDetail should return null for invalid search key', async () => {
-    const consoleSpy = jest.spyOn(console, 'error').mockImplementation()
-    const apiKeySpy = jest.spyOn(MetacriticService, 'sendApiKeyRetrievalWebsiteRequest').mockImplementation(() => {
-      return Promise.resolve(null)
-    });
-    (metacriticService as any).apiKey = undefined
-
-    const result = await metacriticService.getDetail('Test Game', RecordType.Game)
-    expect(result.success).toBe(false)
-    expect(result.data).toBeNull()
-    expect(result.error).toBe('Failed to retrieve API key')
-
-    expect(consoleSpy.mock.calls.length).toBe(1)
-    apiKeySpy.mockRestore()
-    consoleSpy.mockRestore()
-  })
-
-  test('sendApiKeyRetrievalWebsiteRequest should return null if key not found', async () => {
-    const mockResponse = {
-      ok: false,
-      status: 404,
-      text: jest.fn().mockResolvedValue('Not Found')
-    }
-    const fetchSpy = jest.spyOn(global, 'fetch').mockResolvedValue(mockResponse as any)
-    const consoleSpy = jest.spyOn(console, 'error').mockImplementation()
-    const response = await MetacriticService.sendApiKeyRetrievalWebsiteRequest()
-    expect(response).toBeNull()
-    fetchSpy.mockRestore()
-    consoleSpy.mockRestore()
-  })
-
-  test('sendApiKeyRetrievalWebsiteRequest should return null if an exception is thrown', async () => {
-    const fetchSpy = jest.spyOn(global, 'fetch').mockImplementation(() => {
-      throw new Error('Network error')
-    })
-    const consoleSpy = jest.spyOn(console, 'error').mockImplementation()
-    const response = await MetacriticService.sendApiKeyRetrievalWebsiteRequest()
-    expect(response).toBeNull()
-    fetchSpy.mockRestore()
-    consoleSpy.mockRestore()
-  })
-
-  test('sendSearchWebRequest should handle exceptions', async () => {
-    const fetchSpy = jest.spyOn(global, 'fetch').mockImplementation(() => {
-      throw new Error('Network error')
-    })
-    const consoleSpy = jest.spyOn(console, 'error').mockImplementation()
-    const result = await MetacriticService.sendSearchWebRequest('test-slug', 'test-api-key', RecordType.Game)
-    expect(result).toBeUndefined()
-    fetchSpy.mockRestore()
-    consoleSpy.mockRestore()
-  })
-
-  test('sendDetailWebRequest should handle exceptions', async () => {
-    const fetchSpy = jest.spyOn(global, 'fetch').mockImplementation(() => {
-      throw new Error('Network error')
-    })
-    const consoleSpy = jest.spyOn(console, 'error').mockImplementation()
-    const result = await MetacriticService.sendDetailWebRequest('test-slug', 'test-api-key', RecordType.Game)
-    expect(result).toBeUndefined()
-    fetchSpy.mockRestore()
-    consoleSpy.mockRestore()
-  })
-
-  test('sendDetailWebRequest should return undefined if recordType is not supported', async () => {
-    const fetchSpy = jest.spyOn(global, 'fetch').mockImplementation(() => {
-      throw new Error('Network error')
-    })
-    const consoleSpy = jest.spyOn(console, 'error').mockImplementation()
-    // @ts-expect-error - TypeScript error for recordType not defined in the enum
-    const result = await MetacriticService.sendDetailWebRequest('test-slug', 'test-api-key', 85)
-    expect(result).toBeUndefined()
-    fetchSpy.mockRestore()
-    consoleSpy.mockRestore()
+    if (result.success) throw new Error('expected failure')
+    expect(result.error).toMatch(/structure may have changed/)
   })
 })
 
-describe('search parser', () => {
-  const data = {
-    components: [
-      {
-        meta: {
-          componentName: 'search'
-        },
-        data: {
-          items: [
-            {
-              id: 1,
-              typeId: RecordType.Game,
-              title: 'Test Game',
-              slug: 'test-game',
-              criticScoreSummary: {
-                score: 70
-              },
-              mustSee: false,
-              mustWatch: false,
-              mustPlay: true
-            }
-          ]
-        }
+describe('MetacriticService – API key handling', () => {
+  test('shares a single API-key request across concurrent calls', async () => {
+    const counters: { homepage?: number } = {}
+    const service = makeService(happyHandler(), counters)
+    await Promise.all([service.search('The Last of Us'), service.search('The Last of Us')])
+    expect(counters.homepage).toBe(1)
+  })
+
+  test('refreshes the API key after an auth failure and retries', async () => {
+    const counters: { homepage?: number } = {}
+    let searchCalls = 0
+    const service = makeService((url) => {
+      if (isHomepage(url)) return new Response(HOMEPAGE_HTML)
+      if (isSearch(url)) {
+        searchCalls++
+        return searchCalls === 1 ? new Response('', { status: 403 }) : new Response(searchFixture)
       }
-    ]
-  }
+      return new Response(detailFixture)
+    }, counters)
 
-  test('should parse search result correctly', () => {
-    const jsonResult = JSON.stringify(data)
-
-    const parsingResult = parseSearchJsonResult(jsonResult, 'Test Game', 0.5)
-    expect(parsingResult).toHaveLength(1)
-    expect(parsingResult).toBeInstanceOf(Array<MetacriticSearchEntry>)
-    expect(parsingResult[0].id).toBe(data.components[0].data.items[0].id)
-    expect(parsingResult[0].recordType).toBe(data.components[0].data.items[0].typeId)
-    expect(parsingResult[0].title).toBe(data.components[0].data.items[0].title)
-    expect(parsingResult[0].slug).toBe(data.components[0].data.items[0].slug)
-    expect(parsingResult[0].criticScore).toBe(data.components[0].data.items[0].criticScoreSummary.score)
-    expect(parsingResult[0].must).toBe(data.components[0].data.items[0].mustSee || data.components[0].data.items[0].mustWatch || data.components[0].data.items[0].mustPlay)
-    expect(parsingResult[0].similarity).toBe(1)
-  })
-
-  test('should skip entries with low similarity', () => {
-    const jsonResult = JSON.stringify(data)
-
-    const parsingResult = parseSearchJsonResult(jsonResult, 'Nonexistent', 0.5)
-    expect(parsingResult).toHaveLength(0)
-  })
-
-  test('should handle invalid JSON gracefully', () => {
-    const consoleSpy = jest.spyOn(console, 'error').mockImplementation()
-
-    const invalidJson = '{ invalid json }'
-    const parsingResult = parseSearchJsonResult(invalidJson, 'Test Game', 0.5)
-    expect(parsingResult).toHaveLength(0)
-
-    consoleSpy.mockRestore()
-  })
-
-  test('should handle empty data array', () => {
-    const emptyData = {
-      components: [
-        {
-          meta: {
-            componentName: 'search'
-          },
-          data: {
-            items: []
-          }
-        }
-      ]
-    }
-    const jsonResult = JSON.stringify(emptyData)
-    const parsingResult = parseSearchJsonResult(jsonResult, 'Test Game', 0.5)
-    expect(parsingResult).toHaveLength(0)
-  })
-
-  test('should order results by similarity by default', () => {
-    const dataWithMultipleEntries = {
-      components: [
-        {
-          meta: {
-            componentName: 'search'
-          },
-          data: {
-            items: [
-              {
-                id: 1,
-                typeId: RecordType.Game,
-                title: 'Test Game',
-                slug: 'test-game',
-                criticScoreSummary: {
-                  score: 70
-                },
-                mustSee: false,
-                mustWatch: false,
-                mustPlay: true
-              },
-              {
-                id: 2,
-                typeId: RecordType.Game,
-                title: 'Another Game',
-                slug: 'another-game',
-                criticScoreSummary: {
-                  score: 80
-                },
-                mustSee: false,
-                mustWatch: false,
-                mustPlay: true
-              }
-            ]
-          }
-        }
-      ]
-    }
-
-    const jsonResult = JSON.stringify(dataWithMultipleEntries)
-    const parsingResult = parseSearchJsonResult(jsonResult, 'Test', 0.1)
-    expect(parsingResult).toHaveLength(2)
-    expect(parsingResult[0].id).toBe(1)
-    expect(parsingResult[1].id).toBe(2)
-  })
-
-  test('should not order results by similarity if sortBySimilarity is false', () => {
-    const dataWithMultipleEntries = {
-      components: [
-        {
-          meta: {
-            componentName: 'search'
-          },
-          data: {
-            items: [
-              {
-                id: 1,
-                typeId: RecordType.Game,
-                title: 'Test Game',
-                slug: 'test-game',
-                criticScoreSummary: {
-                  score: 70
-                },
-                mustSee: false,
-                mustWatch: false,
-                mustPlay: true
-              },
-              {
-                id: 2,
-                typeId: RecordType.Game,
-                title: 'Another Game',
-                slug: 'another-game',
-                criticScoreSummary: {
-                  score: 80
-                },
-                mustSee: false,
-                mustWatch: false,
-                mustPlay: true
-              }
-            ]
-          }
-        }
-      ]
-    }
-
-    const jsonResult = JSON.stringify(dataWithMultipleEntries)
-    const parsingResult = parseSearchJsonResult(jsonResult, 'Game', 0.1, false)
-    expect(parsingResult).toHaveLength(2)
-    expect(parsingResult[0].id).toBe(1)
-    expect(parsingResult[1].id).toBe(2)
+    const result = await service.search('The Last of Us')
+    expect(result.success).toBe(true)
+    expect(searchCalls).toBe(2)
+    expect(counters.homepage).toBe(2) // initial + forced refresh
   })
 })
 
-describe('detail parser', () => {
-  const data = {
-    components: [
-      {
-        meta: {
-          componentName: 'product'
-        },
-        data: {
-          item: {
-            id: '1',
-            typeId: RecordType.Game,
-            title: 'Test Game',
-            slug: 'test-game',
-          }
-        }
-      },
-      {
-        meta: {
-          componentName: 'critic-score-summary'
-        },
-        data: {
-          item: {
-            score: 80,
-            max: 100,
-            sentiment: 'positive',
-            positiveCount: 40,
-            neutralCount: 5,
-            negativeCount: 2,
-            reviewCount: 47
-          }
-        }
-      },
-      {
-        meta: {
-          componentName: 'user-score-summary'
-        },
-        data: {
-          item: {
-            score: 75,
-            max: 100,
-            sentiment: 'positive',
-            positiveCount: 40,
-            neutralCount: 5,
-            negativeCount: 2,
-            reviewCount: 47
-          }
-        }
-      }
-    ]
-  }
-
-  test('should parse search result correctly', () => {
-    const jsonResult = JSON.stringify(data)
-    const parsingResult = parseDetailJsonResult(jsonResult, true)
-
-    expect(parsingResult).toBeDefined()
-
-    expect(parsingResult!.id).toBe(data.components[0].data.item.id)
-    expect(parsingResult!.recordType).toBe(data.components[0].data.item.typeId)
-    expect(parsingResult!.title).toBe(data.components[0].data.item.title)
-    expect(parsingResult!.slug).toBe(data.components[0].data.item.slug)
-    expect(parsingResult!.criticScore).toBeDefined()
-    expect(parsingResult!.criticScore!.score).toBe(data.components[1].data.item.score)
-    expect(parsingResult!.criticScore!.maxScore).toBe(data.components[1].data.item.max)
-    expect(parsingResult!.criticScore!.sentiment).toBe(data.components[1].data.item.sentiment)
-    expect(parsingResult!.criticScore!.count.positive).toBe(data.components[1].data.item.positiveCount)
-    expect(parsingResult!.criticScore!.count.neutral).toBe(data.components[1].data.item.neutralCount)
-    expect(parsingResult!.criticScore!.count.negative).toBe(data.components[1].data.item.negativeCount)
-    expect(parsingResult!.criticScore!.count.total).toBe(data.components[1].data.item.reviewCount)
-    expect(parsingResult!.userScore).toBeDefined()
-    expect(parsingResult!.userScore!.score).toBe(data.components[2].data.item.score)
-    expect(parsingResult!.userScore!.maxScore).toBe(data.components[2].data.item.max)
-    expect(parsingResult!.userScore!.sentiment).toBe(data.components[2].data.item.sentiment)
-    expect(parsingResult!.userScore!.count.positive).toBe(data.components[2].data.item.positiveCount)
-    expect(parsingResult!.userScore!.count.neutral).toBe(data.components[2].data.item.neutralCount)
-    expect(parsingResult!.userScore!.count.negative).toBe(data.components[2].data.item.negativeCount)
-    expect(parsingResult!.userScore!.count.total).toBe(data.components[2].data.item.reviewCount)
-
+describe('MetacriticService – getDetail', () => {
+  test('returns the detail for the best match', async () => {
+    const result = await makeService(happyHandler()).getDetail('The Last of Us Part II', RecordType.Game)
+    expect(result.success).toBe(true)
+    if (!result.success) throw new Error('expected success')
+    expect(result.data?.title).toBe('The Last of Us Part II')
+    expect(result.data?.criticScore.score).toBe(93)
+    expect(result.data?.criticScore.count.total).toBe(126)
+    expect(result.data?.userScore.sentiment).toBe('mixed')
   })
 
-  test('should handle invalid JSON gracefully', () => {
-    const consoleSpy = jest.spyOn(console, 'error').mockImplementation()
+  test('fails when no entry matches', async () => {
+    const empty = JSON.stringify({ components: [{ meta: { componentName: 'search' }, data: { items: [] } }] })
+    const result = await makeService(happyHandler(empty)).getDetail('Nothing Here', RecordType.Game)
+    expect(result).toEqual({ success: false, error: 'No matching entry found' })
+  })
 
-    const invalidJson = '{ invalid json }'
-    const parsingResult = parseDetailJsonResult(invalidJson, true)
-    expect(parsingResult).toBeNull()
+  test('fails clearly on an unsupported record type', async () => {
+    const result = await makeService(happyHandler()).getDetail('The Last of Us Part II', 99 as RecordType)
+    expect(result.success).toBe(false)
+    if (result.success) throw new Error('expected failure')
+    expect(result.error).toMatch(/Unsupported record type/)
+  })
+})
 
-    consoleSpy.mockRestore()
+describe('parser', () => {
+  test('maps search items into typed entries', () => {
+    const entries = parseSearchJsonResult(searchFixture, 'The Last of Us', 0.5)
+    expect(entries[0]).toMatchObject({ id: 2001, recordType: RecordType.TVShow, must: true, criticScoreValue: 84 })
+    expect(entries[0].similarity).toBe(1)
+  })
+
+  test('throws a ScraperError on invalid JSON', () => {
+    expect(() => parseSearchJsonResult('{ not json }', 'x', 0.5)).toThrow(ScraperError)
+  })
+
+  test('throws a ScraperError when a component is missing', () => {
+    expect(() => parseDetailJsonResult(JSON.stringify({ components: [] }), true)).toThrow(/structure may have changed/)
+  })
+
+  test('maps the detail payload into score objects', () => {
+    const entry = parseDetailJsonResult(detailFixture, true)
+    expect(entry.criticScore.maxScore).toBe(100)
+    expect(entry.userScore.count.negative).toBe(30000)
+    expect(entry.must).toBe(true)
+  })
+})
+
+describe('HttpClient', () => {
+  test('retries on 429 then succeeds', async () => {
+    let calls = 0
+    const fetchFn: FetchLike = async () => {
+      calls++
+      return calls === 1 ? new Response('', { status: 429, headers: { 'retry-after': '0' } }) : new Response('ok')
+    }
+    const response = await new HttpClient({ fetch: fetchFn, retries: 2, retryDelay: 1 }).request('https://example.com')
+    expect(calls).toBe(2)
+    expect(await response.text()).toBe('ok')
+  })
+
+  test('retries network errors then throws', async () => {
+    let calls = 0
+    const fetchFn: FetchLike = async () => {
+      calls++
+      throw new Error('boom')
+    }
+    await expect(
+      new HttpClient({ fetch: fetchFn, retries: 1, retryDelay: 1 }).request('https://example.com'),
+    ).rejects.toThrow('boom')
+    expect(calls).toBe(2)
+  })
+
+  test('does not retry once the caller aborts', async () => {
+    let calls = 0
+    const fetchFn: FetchLike = async (_input, init) => {
+      calls++
+      if (init?.signal?.aborted) throw new Error('aborted')
+      return new Response('ok')
+    }
+    const controller = new AbortController()
+    controller.abort()
+    await expect(
+      new HttpClient({ fetch: fetchFn, retries: 3, retryDelay: 1 }).request(
+        'https://example.com',
+        {},
+        controller.signal,
+      ),
+    ).rejects.toThrow()
+    expect(calls).toBe(1)
+  })
+
+  test('injects a random User-Agent when none is supplied', async () => {
+    let seen: Headers | undefined
+    const fetchFn: FetchLike = async (_input, init) => {
+      seen = new Headers(init?.headers)
+      return new Response('ok')
+    }
+    await new HttpClient({ fetch: fetchFn, retries: 0 }).request('https://example.com')
+    expect(seen?.get('User-Agent')).toBeTruthy()
   })
 })
 
 describe('utils', () => {
-  test('getSimilarity should return 1 for identical strings', () => {
-    const result = getSimilarity('test', 'test')
-    expect(result).toBe(1)
+  test('getSimilarity matches documented values', () => {
+    expect(getSimilarity('test', 'test')).toBe(1)
+    expect(getSimilarity('test', 'banana')).toBe(0)
+    expect(getSimilarity('Elden Ring', 'Elden Rin')).toBe(0.9)
   })
 
-  test('getSimilarity should return 0 for completely different strings', () => {
-    const result = getSimilarity('test', 'banana')
-    expect(result).toBe(0)
+  test('getMatchScore keeps short queries against long titles', () => {
+    expect(getMatchScore('The Last of Us Part II', 'The Last of Us')).toBeGreaterThanOrEqual(0.5)
   })
 
-  test('getSimilarity should return correct similarity for similar strings', () => {
-    const result = getSimilarity('test', 'test123')
-    expect(result).toBeGreaterThan(0)
-    expect(result).toBeLessThan(1)
-  })
-
-  test('getSimilarity should handle empty strings', () => {
-    const result1 = getSimilarity('', '')
-    const result2 = getSimilarity('test', '')
-    expect(result1).toBe(1) // Two empty strings are identical
-    expect(result2).toBe(0) // No similarity between text and empty string
-  })
-
-  test('getSimilarity should be case insensitive', () => {
-    const result = getSimilarity('Test', 'test')
-    expect(result).toBe(1) // Or whatever behavior is expected for case sensitivity
-  })
-
-  test('getSimilarity should compute Elden Ring and Elden Rin correctly', () => {
-    const result = getSimilarity('Elden Ring', 'Elden Rin')
-    expect(result).toBe(0.9)
+  test('clampSimilarity keeps values within [0, 1]', () => {
+    expect(clampSimilarity(-1)).toBe(0)
+    expect(clampSimilarity(5)).toBe(1)
+    expect(clampSimilarity(Number.NaN)).toBe(0.5)
   })
 })

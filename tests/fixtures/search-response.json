@@ -1,0 +1,51 @@
+{
+  "components": [
+    {
+      "meta": { "componentName": "search" },
+      "data": {
+        "items": [
+          {
+            "id": 1001,
+            "typeId": 13,
+            "title": "The Last of Us Part II",
+            "slug": "the-last-of-us-part-ii",
+            "criticScoreSummary": { "score": 93 },
+            "mustSee": false,
+            "mustWatch": false,
+            "mustPlay": true
+          },
+          {
+            "id": 1002,
+            "typeId": 13,
+            "title": "The Last of Us Part I",
+            "slug": "the-last-of-us-part-i",
+            "criticScoreSummary": { "score": 88 },
+            "mustSee": false,
+            "mustWatch": false,
+            "mustPlay": false
+          },
+          {
+            "id": 2001,
+            "typeId": 1,
+            "title": "The Last of Us",
+            "slug": "the-last-of-us-show",
+            "criticScoreSummary": { "score": 84 },
+            "mustSee": true,
+            "mustWatch": true,
+            "mustPlay": false
+          },
+          {
+            "id": 9001,
+            "typeId": 2,
+            "title": "Completely Unrelated Movie",
+            "slug": "completely-unrelated-movie",
+            "criticScoreSummary": { "score": 51 },
+            "mustSee": false,
+            "mustWatch": false,
+            "mustPlay": false
+          }
+        ]
+      }
+    }
+  ]
+}

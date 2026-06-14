@@ -1,0 +1,43 @@
+{
+  "components": [
+    {
+      "meta": { "componentName": "product" },
+      "data": {
+        "item": {
+          "id": 1001,
+          "typeId": 13,
+          "title": "The Last of Us Part II",
+          "slug": "the-last-of-us-part-ii"
+        }
+      }
+    },
+    {
+      "meta": { "componentName": "critic-score-summary" },
+      "data": {
+        "item": {
+          "score": 93,
+          "max": 100,
+          "sentiment": "positive",
+          "positiveCount": 118,
+          "neutralCount": 6,
+          "negativeCount": 2,
+          "reviewCount": 126
+        }
+      }
+    },
+    {
+      "meta": { "componentName": "user-score-summary" },
+      "data": {
+        "item": {
+          "score": 5.8,
+          "max": 10,
+          "sentiment": "mixed",
+          "positiveCount": 32000,
+          "neutralCount": 4000,
+          "negativeCount": 30000,
+          "reviewCount": 66000
+        }
+      }
+    }
+  ]
+}
