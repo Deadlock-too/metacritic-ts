@@ -14,6 +14,12 @@ export type MetacriticSearchEntry = {
   similarity: number
 }
 
+export type SearchResult = {
+  success: boolean
+  data: MetacriticSearchEntry[]
+  error?: string
+}
+
 export type MetacriticEntry = {
   id: number
   recordType: RecordType
@@ -22,6 +28,12 @@ export type MetacriticEntry = {
   must: boolean
   userScore: Score
   criticScore: Score
+}
+
+export type DetailResult = {
+  success: boolean
+  data: MetacriticEntry | null
+  error?: string
 }
 
 export type Score = {

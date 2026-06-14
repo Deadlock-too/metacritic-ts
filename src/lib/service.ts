@@ -1,5 +1,5 @@
 import { parseDetailJsonResult, parseSearchJsonResult } from './parser'
-import { MetacriticEntry, RecordType, MetacriticSearchEntry } from './types'
+import { DetailResult, RecordType, SearchResult } from './types'
 
 class SearchInformations {
   apiKey: string
@@ -38,9 +38,13 @@ export class MetacriticService {
     this.minSimilarity = minSimilarity
   }
 
-  async search(searchKey: string, recordType?: RecordType, sortBySimilarity: boolean = true): Promise<MetacriticSearchEntry[]> {
+  async search(searchKey: string, recordType?: RecordType, sortBySimilarity: boolean = true): Promise<SearchResult> {
     if (!searchKey) {
-      return []
+      return {
+        success: false,
+        data: [],
+        error: 'Search key is required'
+      }
     }
 
     if (!this.apiKey) {
@@ -49,21 +53,46 @@ export class MetacriticService {
         this.apiKey = searchInfo.apiKey
       } else {
         console.error('Failed to retrieve API key')
-        return []
+        return {
+          success: false,
+          data: [],
+          error: 'Failed to retrieve API key'
+        }
       }
     }
 
     const jsonResult = await MetacriticService.sendSearchWebRequest(searchKey, this.apiKey, recordType)
-    if (jsonResult) {
-      return parseSearchJsonResult(jsonResult, searchKey, this.minSimilarity, sortBySimilarity)
+    if (!jsonResult) {
+      return {
+        success: false,
+        data: [],
+        error: 'Failed to fetch search results'
+      }
     }
 
-    return []
+    try {
+      JSON.parse(jsonResult)
+    } catch {
+      return {
+        success: false,
+        data: [],
+        error: 'Invalid search response format'
+      }
+    }
+
+    return {
+      success: true,
+      data: parseSearchJsonResult(jsonResult, searchKey, this.minSimilarity, sortBySimilarity)
+    }
   }
 
-  async getDetail(searchKey: string, recordType: RecordType, sortBySimilarity: boolean = true): Promise<MetacriticEntry | null> {
+  async getDetail(searchKey: string, recordType: RecordType, sortBySimilarity: boolean = true): Promise<DetailResult> {
     if (!searchKey) {
-      return null
+      return {
+        success: false,
+        data: null,
+        error: 'Search key is required'
+      }
     }
 
     if (!this.apiKey) {
@@ -72,20 +101,64 @@ export class MetacriticService {
         this.apiKey = searchInfo.apiKey
       } else {
         console.error('Failed to retrieve API key')
-        return null
+        return {
+          success: false,
+          data: null,
+          error: 'Failed to retrieve API key'
+        }
       }
     }
 
     const searchResult = await this.search(searchKey, recordType, sortBySimilarity)
-    if (searchResult && searchResult.length > 0) {
-      const detailResult = await MetacriticService.sendDetailWebRequest(searchResult[0].slug, this.apiKey, recordType)
-
-      if (detailResult) {
-        return parseDetailJsonResult(detailResult, searchResult[0].must)
+    if (!searchResult.success) {
+      return {
+        success: false,
+        data: null,
+        error: searchResult.error || 'Failed to search detail entry'
       }
     }
 
-    return null
+    if (searchResult.data.length === 0) {
+      return {
+        success: false,
+        data: null,
+        error: 'No matching entry found'
+      }
+    }
+
+    const detailResult = await MetacriticService.sendDetailWebRequest(searchResult.data[0].slug, this.apiKey, recordType)
+
+    if (!detailResult) {
+      return {
+        success: false,
+        data: null,
+        error: 'Failed to fetch detail result'
+      }
+    }
+
+    try {
+      JSON.parse(detailResult)
+    } catch {
+      return {
+        success: false,
+        data: null,
+        error: 'Invalid detail response format'
+      }
+    }
+
+    const parsedDetail = parseDetailJsonResult(detailResult, searchResult.data[0].must)
+    if (!parsedDetail) {
+      return {
+        success: false,
+        data: null,
+        error: 'Invalid detail response format'
+      }
+    }
+
+    return {
+      success: true,
+      data: parsedDetail
+    }
   }
 
   static async sendSearchWebRequest(searchKey: string, apiKey: string, recordType?: RecordType) {

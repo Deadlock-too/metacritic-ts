@@ -15,7 +15,8 @@ describe('MetacriticService', () => {
 
     jest.resetAllMocks()
 
-    metacriticService = new MetacriticService()
+    metacriticService = new MetacriticService();
+    (metacriticService as any).apiKey = 'test-api-key'
   })
 
   afterEach(() => {
@@ -70,15 +71,17 @@ describe('MetacriticService', () => {
     MetacriticService.sendSearchWebRequest = jest.fn().mockResolvedValue(JSON.stringify(mockValue))
 
     const result = await metacriticService.search('Test Game')
-    expect(result).toHaveLength(1)
-    expect(result).toBeInstanceOf(Array<MetacriticSearchEntry>)
-    expect(result[0].id).toBe(mockValue.components[0].data.items[0].id)
-    expect(result[0].recordType).toBe(mockValue.components[0].data.items[0].typeId)
-    expect(result[0].title).toBe(mockValue.components[0].data.items[0].title)
-    expect(result[0].slug).toBe(mockValue.components[0].data.items[0].slug)
-    expect(result[0].criticScore).toBe(mockValue.components[0].data.items[0].criticScoreSummary.score)
-    expect(result[0].must).toBe(mockValue.components[0].data.items[0].mustSee || mockValue.components[0].data.items[0].mustWatch || mockValue.components[0].data.items[0].mustPlay)
-    expect(result[0].similarity).toBe(1)
+    expect(result.success).toBe(true)
+    expect(result.error).toBeUndefined()
+    expect(result.data).toHaveLength(1)
+    expect(result.data).toBeInstanceOf(Array<MetacriticSearchEntry>)
+    expect(result.data[0].id).toBe(mockValue.components[0].data.items[0].id)
+    expect(result.data[0].recordType).toBe(mockValue.components[0].data.items[0].typeId)
+    expect(result.data[0].title).toBe(mockValue.components[0].data.items[0].title)
+    expect(result.data[0].slug).toBe(mockValue.components[0].data.items[0].slug)
+    expect(result.data[0].criticScore).toBe(mockValue.components[0].data.items[0].criticScoreSummary.score)
+    expect(result.data[0].must).toBe(mockValue.components[0].data.items[0].mustSee || mockValue.components[0].data.items[0].mustWatch || mockValue.components[0].data.items[0].mustPlay)
+    expect(result.data[0].similarity).toBe(1)
   })
 
   test('getDetail should return result', async () => {
@@ -162,27 +165,29 @@ describe('MetacriticService', () => {
     MetacriticService.sendDetailWebRequest = jest.fn().mockResolvedValue(JSON.stringify(mockValue))
 
     const result = await metacriticService.getDetail('Test game', RecordType.Game)
-    expect(result).toBeDefined()
-    expect(result!.id).toBe(mockValue.components[0].data.item.id)
-    expect(result!.recordType).toBe(mockValue.components[0].data.item.typeId)
-    expect(result!.title).toBe(mockValue.components[0].data.item.title)
-    expect(result!.slug).toBe(mockValue.components[0].data.item.slug)
-    expect(result!.criticScore).toBeDefined()
-    expect(result!.criticScore!.score).toBe(mockValue.components[1].data.item.score)
-    expect(result!.criticScore!.maxScore).toBe(mockValue.components[1].data.item.max)
-    expect(result!.criticScore!.sentiment).toBe(mockValue.components[1].data.item.sentiment)
-    expect(result!.criticScore!.count.positive).toBe(mockValue.components[1].data.item.positiveCount)
-    expect(result!.criticScore!.count.neutral).toBe(mockValue.components[1].data.item.neutralCount)
-    expect(result!.criticScore!.count.negative).toBe(mockValue.components[1].data.item.negativeCount)
-    expect(result!.criticScore!.count.total).toBe(mockValue.components[1].data.item.reviewCount)
-    expect(result!.userScore).toBeDefined()
-    expect(result!.userScore!.score).toBe(mockValue.components[2].data.item.score)
-    expect(result!.userScore!.maxScore).toBe(mockValue.components[2].data.item.max)
-    expect(result!.userScore!.sentiment).toBe(mockValue.components[2].data.item.sentiment)
-    expect(result!.userScore!.count.positive).toBe(mockValue.components[2].data.item.positiveCount)
-    expect(result!.userScore!.count.neutral).toBe(mockValue.components[2].data.item.neutralCount)
-    expect(result!.userScore!.count.negative).toBe(mockValue.components[2].data.item.negativeCount)
-    expect(result!.userScore!.count.total).toBe(mockValue.components[2].data.item.reviewCount)
+    expect(result.success).toBe(true)
+    expect(result.error).toBeUndefined()
+    expect(result.data).toBeDefined()
+    expect(result.data!.id).toBe(mockValue.components[0].data.item.id)
+    expect(result.data!.recordType).toBe(mockValue.components[0].data.item.typeId)
+    expect(result.data!.title).toBe(mockValue.components[0].data.item.title)
+    expect(result.data!.slug).toBe(mockValue.components[0].data.item.slug)
+    expect(result.data!.criticScore).toBeDefined()
+    expect(result.data!.criticScore!.score).toBe(mockValue.components[1].data.item.score)
+    expect(result.data!.criticScore!.maxScore).toBe(mockValue.components[1].data.item.max)
+    expect(result.data!.criticScore!.sentiment).toBe(mockValue.components[1].data.item.sentiment)
+    expect(result.data!.criticScore!.count.positive).toBe(mockValue.components[1].data.item.positiveCount)
+    expect(result.data!.criticScore!.count.neutral).toBe(mockValue.components[1].data.item.neutralCount)
+    expect(result.data!.criticScore!.count.negative).toBe(mockValue.components[1].data.item.negativeCount)
+    expect(result.data!.criticScore!.count.total).toBe(mockValue.components[1].data.item.reviewCount)
+    expect(result.data!.userScore).toBeDefined()
+    expect(result.data!.userScore!.score).toBe(mockValue.components[2].data.item.score)
+    expect(result.data!.userScore!.maxScore).toBe(mockValue.components[2].data.item.max)
+    expect(result.data!.userScore!.sentiment).toBe(mockValue.components[2].data.item.sentiment)
+    expect(result.data!.userScore!.count.positive).toBe(mockValue.components[2].data.item.positiveCount)
+    expect(result.data!.userScore!.count.neutral).toBe(mockValue.components[2].data.item.neutralCount)
+    expect(result.data!.userScore!.count.negative).toBe(mockValue.components[2].data.item.negativeCount)
+    expect(result.data!.userScore!.count.total).toBe(mockValue.components[2].data.item.reviewCount)
   })
 
   test('search should handle invalid response format', async () => {
@@ -192,7 +197,9 @@ describe('MetacriticService', () => {
     })
 
     const result = await metacriticService.search('Test Game')
-    expect(result).toHaveLength(0)
+    expect(result.success).toBe(false)
+    expect(result.data).toHaveLength(0)
+    expect(result.error).toBe('Invalid search response format')
 
     consoleSpy.mockRestore()
     metacriticSpy.mockRestore()
@@ -205,7 +212,9 @@ describe('MetacriticService', () => {
     })
 
     const result = await metacriticService.search('Test Game')
-    expect(result).toHaveLength(0)
+    expect(result.success).toBe(false)
+    expect(result.data).toHaveLength(0)
+    expect(result.error).toBe('Failed to fetch search results')
 
     consoleSpy.mockRestore()
     metacriticSpy.mockRestore()
@@ -213,12 +222,22 @@ describe('MetacriticService', () => {
 
   test('getDetail should handle invalid response format', async () => {
     const consoleSpy = jest.spyOn(console, 'error').mockImplementation()
+    jest.spyOn(MetacriticService, 'sendSearchWebRequest').mockImplementation(() => {
+      return Promise.resolve(JSON.stringify({
+        components: [{
+          meta: { componentName: 'search' },
+          data: { items: [{ id: 1, typeId: RecordType.Game, title: 'Test Game', slug: 'test-game', criticScoreSummary: { score: 70 }, mustSee: false, mustWatch: false, mustPlay: true }] }
+        }]
+      }))
+    })
     const metacriticSpy = jest.spyOn(MetacriticService, 'sendDetailWebRequest').mockImplementation(() => {
       return Promise.resolve('Invalid JSON')
     })
 
     const result = await metacriticService.getDetail('Test Game', RecordType.Game)
-    expect(result).toBeNull()
+    expect(result.success).toBe(false)
+    expect(result.data).toBeNull()
+    expect(result.error).toBe('Invalid detail response format')
 
     consoleSpy.mockRestore()
     metacriticSpy.mockRestore()
@@ -226,12 +245,22 @@ describe('MetacriticService', () => {
 
   test('getDetail should handle empty response', async () => {
     const consoleSpy = jest.spyOn(console, 'error').mockImplementation()
+    jest.spyOn(MetacriticService, 'sendSearchWebRequest').mockImplementation(() => {
+      return Promise.resolve(JSON.stringify({
+        components: [{
+          meta: { componentName: 'search' },
+          data: { items: [{ id: 1, typeId: RecordType.Game, title: 'Test Game', slug: 'test-game', criticScoreSummary: { score: 70 }, mustSee: false, mustWatch: false, mustPlay: true }] }
+        }]
+      }))
+    })
     const metacriticSpy = jest.spyOn(MetacriticService, 'sendDetailWebRequest').mockImplementation(() => {
       return Promise.resolve(undefined)
     })
 
     const result = await metacriticService.getDetail('Test Game', RecordType.Game)
-    expect(result).toBeNull()
+    expect(result.success).toBe(false)
+    expect(result.data).toBeNull()
+    expect(result.error).toBe('Failed to fetch detail result')
 
     consoleSpy.mockRestore()
     metacriticSpy.mockRestore()
@@ -239,22 +268,29 @@ describe('MetacriticService', () => {
 
   test('search should return empty array for empty search key', async () => {
     const result = await metacriticService.search('')
-    expect(result).toEqual([])
+    expect(result.success).toBe(false)
+    expect(result.data).toEqual([])
+    expect(result.error).toBe('Search key is required')
   })
 
   test('getDetail should return null for empty search key', async () => {
     const result = await metacriticService.getDetail('', RecordType.Game)
-    expect(result).toBeNull()
+    expect(result.success).toBe(false)
+    expect(result.data).toBeNull()
+    expect(result.error).toBe('Search key is required')
   })
 
   test('search should return empty array for invalid search key', async () => {
     const consoleSpy = jest.spyOn(console, 'error').mockImplementation()
     const apiKeySpy = jest.spyOn(MetacriticService, 'sendApiKeyRetrievalWebsiteRequest').mockImplementation(() => {
       return Promise.resolve(null)
-    })
+    });
+    (metacriticService as any).apiKey = undefined
 
     const result = await metacriticService.search('Test Game')
-    expect(result).toEqual([])
+    expect(result.success).toBe(false)
+    expect(result.data).toEqual([])
+    expect(result.error).toBe('Failed to retrieve API key')
 
     expect(consoleSpy.mock.calls.length).toBe(1)
     apiKeySpy.mockRestore()
@@ -265,10 +301,13 @@ describe('MetacriticService', () => {
     const consoleSpy = jest.spyOn(console, 'error').mockImplementation()
     const apiKeySpy = jest.spyOn(MetacriticService, 'sendApiKeyRetrievalWebsiteRequest').mockImplementation(() => {
       return Promise.resolve(null)
-    })
+    });
+    (metacriticService as any).apiKey = undefined
 
     const result = await metacriticService.getDetail('Test Game', RecordType.Game)
-    expect(result).toBeNull()
+    expect(result.success).toBe(false)
+    expect(result.data).toBeNull()
+    expect(result.error).toBe('Failed to retrieve API key')
 
     expect(consoleSpy.mock.calls.length).toBe(1)
     apiKeySpy.mockRestore()

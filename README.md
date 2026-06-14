@@ -39,8 +39,10 @@ async function search() {
     const results = await metacriticService.search('The Last of Us');
     
     // This will result in a list of games, movies or tv shows
-    if (results) {
-        console.log('Search results:', results);
+    if (results.success) {
+        console.log('Search results:', results.data);
+    } else {
+        console.error('Search failed:', results.error);
     }
 }
 
@@ -51,16 +53,18 @@ async function getDetail() {
     const metacriticService = new MetacriticService();
     
     // Get the details of a game
-    const details = await metacriticService.getDetail('The Last of Us Part II', RecordType.GAME);
+    const details = await metacriticService.getDetail('The Last of Us Part II', RecordType.Game);
 
     // This will result in the details of the game, including the rating    
-    if (details) {
-        console.log('Game details:', details);
+    if (details.success) {
+        console.log('Game details:', details.data);
+    } else {
+        console.error('Detail fetch failed:', details.error);
     }
 }
 
 await search();
-await getDetails();
+await getDetail();
 ```
 
 ## API
@@ -75,12 +79,12 @@ The main service class for interacting with the Metacritic website.
     - `minSimilarity`: Optional parameter to set the minimum similarity threshold for search results to not be filtered out (Default: 0.5).
 
 #### Methods
-- `async search(searchKey: string): Promise<MetacriticSearchEntry[]>`: Searches for games, movies or tv shows matching the provided search key.
+- `async search(searchKey: string): Promise<SearchResult>`: Searches for games, movies or tv shows matching the provided search key.
     - `searchKey`: The title to search for
     - `recordType`: Optional record type to adjust search behavior, it hasn't a default value and will search for all types.
     - `sortBySimilarity`: Optional boolean to sort the results by similarity to the search key (Default: true). If set to false, the results will leave to the order returned by the Metacritic API.
 
-- `async getDetail(title: string, recordType: RecordType): Promise<MetacriticEntry | null>`: Retrieves the details of a game, movie or tv show matching the provided title.
+- `async getDetail(title: string, recordType: RecordType): Promise<DetailResult>`: Retrieves the details of a game, movie or tv show matching the provided title.
     - `title`: The title to search for
     - `recordType`: The type of record to retrieve (game, movie or tv show)
     - `sortBySimilarity`: Optional boolean to sort the results by similarity to the search key (Default: true). Pay attention that this parameter is very important for the `getDetail` method, if set to false, the results will leave to the order returned by the Metacritic API and the first result may not be the one you are looking for.
@@ -100,6 +104,12 @@ An interface representing a search entry returned by the MetacriticService.
 - `must`: A boolean indicating if the record is a must-see, must-play or must-watch.
 - `criticScore`: The critic score of the record.
 - `similarity`: A computed value that indicates how similar the record is to the search term.
+
+### `SearchResult`
+An interface representing the `search` method result.
+- `success`: Indicates whether the operation succeeded.
+- `data`: The list of `MetacriticSearchEntry`.
+- `error`: Optional error message when `success` is `false`.
 
 ### `MetacriticEntry`
 An interface representing a record entry returned by the MetacriticService.
@@ -128,6 +138,12 @@ An interface representing a record entry returned by the MetacriticService.
     - `negative`: The number of negative reviews.
     - `neutral`: The number of neutral reviews.
     - `total`: The total number of reviews.
+
+### `DetailResult`
+An interface representing the `getDetail` method result.
+- `success`: Indicates whether the operation succeeded.
+- `data`: A `MetacriticEntry` when found, otherwise `null`.
+- `error`: Optional error message when `success` is `false`.
 
 ## Development
 
