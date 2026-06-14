@@ -1,2 +1,11 @@
 export { MetacriticService } from './lib/service'
+export type { MetacriticSearchOptions, MetacriticDetailOptions } from './lib/service'
 export * from './lib/types'
+export { getSimilarity, getMatchScore } from './lib/utils'
+
+export type { Result, Success, Failure } from './core/result'
+export type { ScraperOptions } from './core/options'
+export type { HttpClientOptions, FetchLike } from './core/http'
+export type { Logger } from './core/logger'
+export { consoleLogger, silentLogger } from './core/logger'
+export { ScraperError } from './core/errors'
