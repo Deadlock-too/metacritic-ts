@@ -1,5 +1,5 @@
 import { parseDetailJsonResult, parseSearchJsonResult } from './parser'
-import { DetailResult, RecordType, SearchResult } from './types'
+import { DetailResult, RecordType, SearchEntryResult, SearchResult } from './types'
 import { BaseScraperService, ScraperOptions } from '../core/options'
 import { ScraperError } from '../core/errors'
 import { fail, ok } from '../core/result'
@@ -62,6 +62,13 @@ export class MetacriticService extends BaseScraperService {
       this.logger.error('Error during search:', error)
       return fail(error instanceof ScraperError ? error.message : 'Failed to fetch search results')
     }
+  }
+
+  /** Convenience wrapper returning only the single best search match (or `null`). */
+  async searchOne(searchKey: string, options: MetacriticSearchOptions = {}): Promise<SearchEntryResult> {
+    const result = await this.search(searchKey, options)
+    if (!result.success) return result
+    return ok(result.data.length > 0 ? result.data[0] : null)
   }
 
   async getDetail(

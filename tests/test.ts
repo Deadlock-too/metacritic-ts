@@ -78,6 +78,21 @@ describe('MetacriticService – search', () => {
   })
 })
 
+describe('MetacriticService – searchOne', () => {
+  test('returns the single best match', async () => {
+    const result = await makeService(happyHandler()).searchOne('The Last of Us')
+    expect(result.success).toBe(true)
+    if (!result.success) throw new Error('expected success')
+    expect(result.data?.id).toBe(2001)
+  })
+
+  test('returns null when nothing matches', async () => {
+    const empty = JSON.stringify({ components: [{ meta: { componentName: 'search' }, data: { items: [] } }] })
+    const result = await makeService(happyHandler(empty)).searchOne('Nothing Here')
+    expect(result).toEqual({ success: true, data: null })
+  })
+})
+
 describe('MetacriticService – API key handling', () => {
   test('shares a single API-key request across concurrent calls', async () => {
     const counters: { homepage?: number } = {}

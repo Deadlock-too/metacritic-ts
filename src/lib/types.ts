@@ -20,6 +20,9 @@ export type MetacriticSearchEntry = {
 /** Result of {@link MetacriticService.search}. */
 export type SearchResult = Result<MetacriticSearchEntry[]>
 
+/** Result of {@link MetacriticService.searchOne}. */
+export type SearchEntryResult = Result<MetacriticSearchEntry | null>
+
 export type MetacriticEntry = {
   id: number
   recordType: RecordType
