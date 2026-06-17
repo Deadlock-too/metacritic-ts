@@ -1,15 +1,14 @@
 import { describe, expect, test } from '@jest/globals'
 import { readFileSync } from 'node:fs'
 import { MetacriticService, RecordType, ScraperError } from '../src'
-import { getMatchScore, getSimilarity } from '../src/lib/utils'
+import { getMatchScore, getSimilarity } from '../src'
 import { parseDetailJsonResult, parseSearchJsonResult } from '../src/lib/parser'
-import { HttpClient, type FetchLike } from '../src/core/http'
-import { clampSimilarity } from '../src/core/options'
+import { HttpClient, type FetchLike, clampSimilarity } from '../src/core'
 
 const searchFixture = readFileSync('tests/fixtures/search-response.json', 'utf8')
 const detailFixture = readFileSync('tests/fixtures/detail-response.json', 'utf8')
 
-const HOMEPAGE_HTML = '<html><body><script>boot({"u":"/api?apiKey=KEY_123&v=2"})</script></body></html>'
+const HOMEPAGE_HTML = '<html lang="en-US"><body><script>boot({"u":"/api?apiKey=KEY_123&v=2"})</script></body></html>'
 
 const isHomepage = (u: string) => u.startsWith('https://www.metacritic.com')
 const isSearch = (u: string) => u.includes('backend.metacritic.com') && u.includes('/search/')

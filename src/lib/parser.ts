@@ -1,5 +1,4 @@
-import { getMatchScore } from '../core/similarity'
-import { ScraperError } from '../core/errors'
+import { getMatchScore, ScraperError } from '../core'
 import {
   MetacriticComponent,
   MetacriticEntry,
