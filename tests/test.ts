@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { MetacriticService, RecordType, ScraperError } from '../src'
 import { getMatchScore, getSimilarity } from '../src'
 import { parseDetailJsonResult, parseSearchJsonResult } from '../src/lib/parser'
-import { HttpClient, type FetchLike, clampSimilarity } from '../src/core'
+import { HttpClient, type FetchLike, clampSimilarity } from '@deadlock-too/scrape-kit'
 
 const searchFixture = readFileSync('tests/fixtures/search-response.json', 'utf8')
 const detailFixture = readFileSync('tests/fixtures/detail-response.json', 'utf8')
