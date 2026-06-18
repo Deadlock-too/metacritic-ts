@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import { MetacriticService, RecordType, ScraperError } from '../src'
 import { getMatchScore, getSimilarity } from '../src'
 import { parseDetailJsonResult, parseSearchJsonResult } from '../src/lib/parser'
+import { normalize } from '../src/lib/utils'
 import { HttpClient, type FetchLike, clampSimilarity } from '@deadlock-too/scrape-kit'
 
 const searchFixture = readFileSync('tests/fixtures/search-response.json', 'utf8')
@@ -75,6 +76,46 @@ describe('MetacriticService – search', () => {
     if (result.success) throw new Error('expected failure')
     expect(result.error).toMatch(/structure may have changed/)
   })
+
+  test('surfaces a clear error when the search request fails', async () => {
+    const result = await makeService((url) =>
+      isHomepage(url) ? new Response(HOMEPAGE_HTML) : new Response('', { status: 500 }),
+    ).search('The Last of Us')
+    expect(result).toEqual({ success: false, error: 'Search request failed with status 500' })
+  })
+
+  test('fails when the homepage carries no API key', async () => {
+    const result = await makeService((url) =>
+      isHomepage(url)
+        ? new Response('<html lang="en-US"><script>boot({"u":"/api?v=2"})</script></html>')
+        : new Response(searchFixture),
+    ).search('The Last of Us')
+    expect(result).toEqual({ success: false, error: 'Failed to retrieve API key' })
+  })
+
+  test('fails when the homepage request throws', async () => {
+    const service = new MetacriticService({
+      fetch: async (input) => {
+        if (isHomepage(String(input))) throw new Error('network down')
+        return new Response(searchFixture)
+      },
+      retries: 0,
+    })
+    const result = await service.search('The Last of Us')
+    expect(result).toEqual({ success: false, error: 'Failed to retrieve API key' })
+  })
+
+  test('reports a generic failure when the search request throws a non-ScraperError', async () => {
+    const service = new MetacriticService({
+      fetch: async (input) => {
+        if (isHomepage(String(input))) return new Response(HOMEPAGE_HTML)
+        throw new Error('socket hang up')
+      },
+      retries: 0,
+    })
+    const result = await service.search('The Last of Us')
+    expect(result).toEqual({ success: false, error: 'Failed to fetch search results' })
+  })
 })
 
 describe('MetacriticService – searchOne', () => {
@@ -89,6 +130,13 @@ describe('MetacriticService – searchOne', () => {
     const empty = JSON.stringify({ components: [{ meta: { componentName: 'search' }, data: { items: [] } }] })
     const result = await makeService(happyHandler(empty)).searchOne('Nothing Here')
     expect(result).toEqual({ success: true, data: null })
+  })
+
+  test('propagates a search failure', async () => {
+    const result = await makeService((url) =>
+      isHomepage(url) ? new Response('', { status: 404 }) : new Response(searchFixture),
+    ).searchOne('The Last of Us')
+    expect(result).toEqual({ success: false, error: 'Failed to retrieve API key' })
   })
 })
 
@@ -117,6 +165,37 @@ describe('MetacriticService – API key handling', () => {
     expect(searchCalls).toBe(2)
     expect(counters.homepage).toBe(2) // initial + forced refresh
   })
+
+  test('refreshes the API key after a 401 as well', async () => {
+    let searchCalls = 0
+    const service = makeService((url) => {
+      if (isHomepage(url)) return new Response(HOMEPAGE_HTML)
+      if (isSearch(url)) {
+        searchCalls++
+        return searchCalls === 1 ? new Response('', { status: 401 }) : new Response(searchFixture)
+      }
+      return new Response(detailFixture)
+    })
+
+    const result = await service.search('The Last of Us')
+    expect(result.success).toBe(true)
+    expect(searchCalls).toBe(2)
+  })
+
+  test('gives up when the refreshed API key is still unavailable', async () => {
+    let homepageCalls = 0
+    const service = makeService((url) => {
+      if (isHomepage(url)) {
+        homepageCalls++
+        return homepageCalls === 1 ? new Response(HOMEPAGE_HTML) : new Response('<html lang="en-US"></html>')
+      }
+      return new Response('', { status: 403 }) // search keeps rejecting the key
+    })
+
+    const result = await service.search('The Last of Us')
+    expect(result).toEqual({ success: false, error: 'Failed to retrieve API key' })
+    expect(homepageCalls).toBe(2)
+  })
 })
 
 describe('MetacriticService – getDetail', () => {
@@ -128,6 +207,27 @@ describe('MetacriticService – getDetail', () => {
     expect(result.data?.criticScore.score).toBe(93)
     expect(result.data?.criticScore.count.total).toBe(126)
     expect(result.data?.userScore.sentiment).toBe('mixed')
+  })
+
+  test('honours an explicit sortBySimilarity flag', async () => {
+    const result = await makeService(happyHandler()).getDetail('The Last of Us Part II', RecordType.Game, {
+      sortBySimilarity: false,
+    })
+    expect(result.success).toBe(true)
+    if (!result.success) throw new Error('expected success')
+    expect(result.data?.title).toBe('The Last of Us Part II')
+  })
+
+  test('rejects an empty search key', async () => {
+    const result = await new MetacriticService().getDetail('', RecordType.Game)
+    expect(result).toEqual({ success: false, error: 'Search key is required' })
+  })
+
+  test('propagates a failure from the underlying search', async () => {
+    const result = await makeService((url) =>
+      isHomepage(url) ? new Response('', { status: 404 }) : new Response(detailFixture),
+    ).getDetail('The Last of Us Part II', RecordType.Game)
+    expect(result).toEqual({ success: false, error: 'Failed to retrieve API key' })
   })
 
   test('fails when no entry matches', async () => {
@@ -142,6 +242,44 @@ describe('MetacriticService – getDetail', () => {
     if (result.success) throw new Error('expected failure')
     expect(result.error).toMatch(/Unsupported record type/)
   })
+
+  test('fails to retrieve a key when the detail request keeps rejecting it', async () => {
+    let homepageCalls = 0
+    const service = makeService((url) => {
+      if (isHomepage(url)) {
+        homepageCalls++
+        return homepageCalls === 1 ? new Response(HOMEPAGE_HTML) : new Response('<html lang="en-US"></html>')
+      }
+      if (isSearch(url)) return new Response(searchFixture)
+      return new Response('', { status: 403 }) // detail rejects the key
+    })
+    const result = await service.getDetail('The Last of Us Part II', RecordType.Game)
+    expect(result).toEqual({ success: false, error: 'Failed to retrieve API key' })
+  })
+
+  test('surfaces a clear error when the detail request fails', async () => {
+    const service = makeService((url) => {
+      if (isHomepage(url)) return new Response(HOMEPAGE_HTML)
+      if (isSearch(url)) return new Response(searchFixture)
+      return new Response('', { status: 500 })
+    })
+    const result = await service.getDetail('The Last of Us Part II', RecordType.Game)
+    expect(result).toEqual({ success: false, error: 'Detail request failed with status 500' })
+  })
+
+  test('reports a generic failure when the detail request throws a non-ScraperError', async () => {
+    const service = new MetacriticService({
+      fetch: async (input) => {
+        const url = String(input)
+        if (isHomepage(url)) return new Response(HOMEPAGE_HTML)
+        if (isSearch(url)) return new Response(searchFixture)
+        throw new Error('socket hang up')
+      },
+      retries: 0,
+    })
+    const result = await service.getDetail('The Last of Us Part II', RecordType.Game)
+    expect(result).toEqual({ success: false, error: 'Failed to fetch detail result' })
+  })
 })
 
 describe('parser', () => {
@@ -155,8 +293,35 @@ describe('parser', () => {
     expect(() => parseSearchJsonResult('{ not json }', 'x', 0.5)).toThrow(ScraperError)
   })
 
+  test('throws when the search items are not an array', () => {
+    const bad = JSON.stringify({ components: [{ meta: { componentName: 'search' }, data: { items: null } }] })
+    expect(() => parseSearchJsonResult(bad, 'x', 0.5)).toThrow(/structure may have changed/)
+  })
+
+  test('handles missing scores and the full range of must-* flags', () => {
+    const items = [
+      { id: 1, typeId: 13, title: 'No Score', slug: 'no-score' },
+      { id: 2, typeId: 1, title: 'Must Watch', slug: 'must-watch', mustWatch: true },
+      { id: 3, typeId: 2, title: 'Empty Score', slug: 'empty', criticScoreSummary: {} },
+    ]
+    const resp = JSON.stringify({ components: [{ meta: { componentName: 'search' }, data: { items } }] })
+    const entries = parseSearchJsonResult(resp, 'whatever', 0)
+    const byId = Object.fromEntries(entries.map((e) => [e.id, e]))
+    expect(byId[1].criticScoreValue).toBe(0)
+    expect(byId[1].must).toBe(false)
+    expect(byId[2].must).toBe(true)
+    expect(byId[3].criticScoreValue).toBe(0)
+  })
+
   test('throws a ScraperError when a component is missing', () => {
     expect(() => parseDetailJsonResult(JSON.stringify({ components: [] }), true)).toThrow(/structure may have changed/)
+  })
+
+  test('throws when the response or its components are malformed', () => {
+    expect(() => parseDetailJsonResult('null', true)).toThrow(/structure may have changed/)
+    expect(() => parseDetailJsonResult(JSON.stringify({}), true)).toThrow(/structure may have changed/)
+    const withNulls = JSON.stringify({ components: [null, { meta: null }, { meta: { componentName: 'other' } }] })
+    expect(() => parseDetailJsonResult(withNulls, true)).toThrow(/structure may have changed/)
   })
 
   test('maps the detail payload into score objects', () => {
@@ -236,5 +401,10 @@ describe('utils', () => {
     expect(clampSimilarity(-1)).toBe(0)
     expect(clampSimilarity(5)).toBe(1)
     expect(clampSimilarity(Number.NaN)).toBe(0.5)
+  })
+
+  test('normalize strips diacritics, case and punctuation', () => {
+    expect(normalize('Pokémon')).toBe('pokemon')
+    expect(normalize("Marvel's Spider-Man")).toBe('marvel s spider man')
   })
 })
