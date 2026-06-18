@@ -77,5 +77,8 @@
   },
   "allowScripts": {
     "unrs-resolver@1.12.2": true
+  },
+  "dependencies": {
+    "@deadlock-too/scrape-kit": "^1.0.0"
   }
 }

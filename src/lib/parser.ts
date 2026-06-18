@@ -1,4 +1,4 @@
-import { getMatchScore, ScraperError } from '../core'
+import { getMatchScore, ScraperError } from '@deadlock-too/scrape-kit'
 import {
   MetacriticComponent,
   MetacriticEntry,

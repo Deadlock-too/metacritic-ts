@@ -1,1 +1,1 @@
-export { getSimilarity, getMatchScore, normalize } from '../core/similarity'
+export { getSimilarity, getMatchScore, normalize } from '@deadlock-too/scrape-kit'

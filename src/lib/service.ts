@@ -1,6 +1,6 @@
 import { parseDetailJsonResult, parseSearchJsonResult } from './parser'
 import { DetailResult, RecordType, SearchEntryResult, SearchResult } from './types'
-import { BaseScraperService, ScraperOptions, ScraperError, fail, ok } from '../core'
+import { BaseScraperService, ScraperOptions, ScraperError, fail, ok } from '@deadlock-too/scrape-kit'
 
 export interface MetacriticSearchOptions {
   /** Restrict results to a single record type (game / movie / TV show). */

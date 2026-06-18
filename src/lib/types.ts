@@ -1,4 +1,4 @@
-import { Result } from '../core'
+import { Result } from '@deadlock-too/scrape-kit'
 
 export enum RecordType {
   TVShow = 1,
