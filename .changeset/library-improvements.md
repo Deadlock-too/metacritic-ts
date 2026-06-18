@@ -1,5 +1,5 @@
 ---
-'metacritic-ts': major
+'metacritic-ts': minor
 ---
 
 Type-safety, resilience and tooling overhaul:
