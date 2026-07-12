@@ -1,277 +1,206 @@
 import { parseDetailJsonResult, parseSearchJsonResult } from './parser'
-import { DetailResult, RecordType, SearchResult } from './types'
+import { DetailResult, RecordType, SearchEntryResult, SearchResult } from './types'
+import { BaseScraperService, ScraperOptions, ScraperError, fail, ok } from '@deadlock-too/scrape-kit'
 
-class SearchInformations {
-  apiKey: string
-
-  constructor(scriptContent: string) {
-    this.apiKey = this.extractApiFromScript(scriptContent)
-  }
-
-  extractApiFromScript(scriptContent: any) {
-    const apiKeyPattern = /apiKey=([^"&]+)/
-    let matches = scriptContent.match(apiKeyPattern)
-    if (matches) {
-      return matches[1]
-    }
-  }
+export interface MetacriticSearchOptions {
+  /** Restrict results to a single record type (game / movie / TV show). */
+  recordType?: RecordType
+  /** Sort results by similarity to the search key (default: true). */
+  sortBySimilarity?: boolean
+  /** Caller-supplied signal to cancel the in-flight request(s). */
+  signal?: AbortSignal
 }
 
-export class MetacriticService {
-  private minSimilarity: number
+export interface MetacriticDetailOptions {
+  /**
+   * Sort the underlying search by similarity before picking the top result.
+   * Important for `getDetail`: with `false`, the first API result may not be the
+   * one you are looking for. Default: true.
+   */
+  sortBySimilarity?: boolean
+  signal?: AbortSignal
+}
+
+const API_KEY_PATTERN = /apiKey=([^"&]+)/
+
+export class MetacriticService extends BaseScraperService {
   private apiKey?: string
+  private apiKeyPromise?: Promise<string | null>
 
   static REFERER_HEADER = 'https://www.metacritic.com/'
   static HOMEPAGE_URL = 'https://www.metacritic.com/'
   static BASE_URL = 'https://backend.metacritic.com/composer/metacritic/pages/'
   static SEARCH_URL = MetacriticService.BASE_URL + 'search/'
 
-  static USER_AGENTS = [
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:127.0) Gecko/20100101 Firefox/127.0',
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15',
-  ]
-
-  constructor(minSimilarity: number = 0.5) {
-    this.minSimilarity = minSimilarity
+  constructor(options: number | ScraperOptions = {}) {
+    super(options)
   }
 
-  async search(searchKey: string, recordType?: RecordType, sortBySimilarity: boolean = true): Promise<SearchResult> {
+  async search(searchKey: string, options: MetacriticSearchOptions = {}): Promise<SearchResult> {
     if (!searchKey) {
-      return {
-        success: false,
-        data: [],
-        error: 'Search key is required'
-      }
-    }
-
-    if (!this.apiKey) {
-      const searchInfo = await MetacriticService.sendApiKeyRetrievalWebsiteRequest()
-      if (searchInfo) {
-        this.apiKey = searchInfo.apiKey
-      } else {
-        console.error('Failed to retrieve API key')
-        return {
-          success: false,
-          data: [],
-          error: 'Failed to retrieve API key'
-        }
-      }
-    }
-
-    const jsonResult = await MetacriticService.sendSearchWebRequest(searchKey, this.apiKey, recordType)
-    if (!jsonResult) {
-      return {
-        success: false,
-        data: [],
-        error: 'Failed to fetch search results'
-      }
+      return fail('Search key is required')
     }
 
     try {
-      JSON.parse(jsonResult)
-    } catch {
-      return {
-        success: false,
-        data: [],
-        error: 'Invalid search response format'
-      }
-    }
+      const response = await this.requestWithApiKey(
+        (apiKey) =>
+          this.http.request(
+            this.buildSearchUrl(searchKey, apiKey, options.recordType),
+            { headers: REQUEST_HEADERS },
+            options.signal,
+          ),
+        options.signal,
+      )
+      if (response === null) return fail('Failed to retrieve API key')
+      if (!response.ok) return fail(`Search request failed with status ${response.status}`)
 
-    return {
-      success: true,
-      data: parseSearchJsonResult(jsonResult, searchKey, this.minSimilarity, sortBySimilarity)
+      const body = await response.text()
+      return ok(parseSearchJsonResult(body, searchKey, this.minSimilarity, options.sortBySimilarity ?? true))
+    } catch (error) {
+      this.logger.error('Error during search:', error)
+      return fail(error instanceof ScraperError ? error.message : 'Failed to fetch search results')
     }
   }
 
-  async getDetail(searchKey: string, recordType: RecordType, sortBySimilarity: boolean = true): Promise<DetailResult> {
+  /** Convenience wrapper returning only the single best search match (or `null`). */
+  async searchOne(searchKey: string, options: MetacriticSearchOptions = {}): Promise<SearchEntryResult> {
+    const result = await this.search(searchKey, options)
+    if (!result.success) return result
+    return ok(result.data.length > 0 ? result.data[0] : null)
+  }
+
+  async getDetail(
+    searchKey: string,
+    recordType: RecordType,
+    options: MetacriticDetailOptions = {},
+  ): Promise<DetailResult> {
     if (!searchKey) {
-      return {
-        success: false,
-        data: null,
-        error: 'Search key is required'
-      }
+      return fail('Search key is required')
     }
 
-    if (!this.apiKey) {
-      const searchInfo = await MetacriticService.sendApiKeyRetrievalWebsiteRequest()
-      if (searchInfo) {
-        this.apiKey = searchInfo.apiKey
-      } else {
-        console.error('Failed to retrieve API key')
-        return {
-          success: false,
-          data: null,
-          error: 'Failed to retrieve API key'
-        }
-      }
-    }
-
-    const searchResult = await this.search(searchKey, recordType, sortBySimilarity)
+    const searchResult = await this.search(searchKey, {
+      recordType,
+      sortBySimilarity: options.sortBySimilarity ?? true,
+      signal: options.signal,
+    })
     if (!searchResult.success) {
-      return {
-        success: false,
-        data: null,
-        error: searchResult.error || 'Failed to search detail entry'
-      }
+      return fail(searchResult.error)
     }
-
     if (searchResult.data.length === 0) {
-      return {
-        success: false,
-        data: null,
-        error: 'No matching entry found'
-      }
+      return fail('No matching entry found')
     }
 
-    const detailResult = await MetacriticService.sendDetailWebRequest(searchResult.data[0].slug, this.apiKey, recordType)
-
-    if (!detailResult) {
-      return {
-        success: false,
-        data: null,
-        error: 'Failed to fetch detail result'
-      }
-    }
-
+    const top = searchResult.data[0]
     try {
-      JSON.parse(detailResult)
-    } catch {
-      return {
-        success: false,
-        data: null,
-        error: 'Invalid detail response format'
-      }
-    }
+      const response = await this.requestWithApiKey(
+        (apiKey) =>
+          this.http.request(
+            this.buildDetailUrl(top.slug, apiKey, recordType),
+            { headers: REQUEST_HEADERS },
+            options.signal,
+          ),
+        options.signal,
+      )
+      if (response === null) return fail('Failed to retrieve API key')
+      if (!response.ok) return fail(`Detail request failed with status ${response.status}`)
 
-    const parsedDetail = parseDetailJsonResult(detailResult, searchResult.data[0].must)
-    if (!parsedDetail) {
-      return {
-        success: false,
-        data: null,
-        error: 'Invalid detail response format'
-      }
-    }
-
-    return {
-      success: true,
-      data: parsedDetail
+      const body = await response.text()
+      return ok(parseDetailJsonResult(body, top.must))
+    } catch (error) {
+      this.logger.error('Error during getDetail:', error)
+      return fail(error instanceof ScraperError ? error.message : 'Failed to fetch detail result')
     }
   }
 
-  static async sendSearchWebRequest(searchKey: string, apiKey: string, recordType?: RecordType) {
-    const headers = this.getRequestHeaders()
+  /**
+   * Runs a request that needs the (cached) Metacritic API key. If the request
+   * is rejected with an auth error, the key is refreshed once and the request
+   * retried — this transparently recovers from key rotation/expiry.
+   */
+  private async requestWithApiKey(
+    run: (apiKey: string) => Promise<Response>,
+    signal?: AbortSignal,
+  ): Promise<Response | null> {
+    let apiKey = await this.getApiKey(signal)
+    if (!apiKey) return null
 
-    const searchUrl = new URL(MetacriticService.SEARCH_URL + encodeURI(searchKey) + '/web')
+    let response = await run(apiKey)
+    if (response.status === 401 || response.status === 403) {
+      apiKey = await this.getApiKey(signal, true)
+      if (!apiKey) return null
+      response = await run(apiKey)
+    }
+    return response
+  }
 
-    searchUrl.searchParams.append('apiKey', apiKey)
+  /**
+   * Returns the cached API key, fetching it if necessary. Concurrent callers
+   * share a single in-flight request rather than each hitting the homepage.
+   */
+  private async getApiKey(signal?: AbortSignal, forceRefresh = false): Promise<string | null> {
+    if (forceRefresh) this.apiKey = undefined
+    if (this.apiKey) return this.apiKey
 
+    if (!this.apiKeyPromise) {
+      this.apiKeyPromise = this.fetchApiKey(signal)
+        .then((key) => {
+          this.apiKey = key ?? undefined
+          return key
+        })
+        .finally(() => {
+          this.apiKeyPromise = undefined
+        })
+    }
+    return this.apiKeyPromise
+  }
+
+  private async fetchApiKey(signal?: AbortSignal): Promise<string | null> {
+    try {
+      const response = await this.http.request(MetacriticService.HOMEPAGE_URL, {}, signal)
+      if (!response.ok) return null
+
+      const html = await response.text()
+      const scriptPattern = /<script[^>]*>([\s\S]*?)<\/script>/g
+      let match: RegExpExecArray | null
+      while ((match = scriptPattern.exec(html)) !== null) {
+        const keyMatch = match[1].match(API_KEY_PATTERN)
+        if (keyMatch) return keyMatch[1]
+      }
+      return null
+    } catch (error) {
+      this.logger.error('Error fetching API key:', error)
+      return null
+    }
+  }
+
+  private buildSearchUrl(searchKey: string, apiKey: string, recordType?: RecordType): URL {
+    const url = new URL(MetacriticService.SEARCH_URL + encodeURI(searchKey) + '/web')
+    url.searchParams.append('apiKey', apiKey)
     if (recordType) {
-      searchUrl.searchParams.append('mcoTypeId', recordType.toString())
+      url.searchParams.append('mcoTypeId', recordType.toString())
     }
-
-    try {
-      const response = await fetch(searchUrl, {
-        headers: headers,
-        method: 'GET',
-        signal: AbortSignal.timeout(60000)
-      })
-
-      if (response.ok) {
-        return await response.text()
-      }
-    } catch (error) {
-      console.error('Error fetching search results:', error)
-    }
+    return url
   }
 
-  static async sendDetailWebRequest(slug: string, apiKey: string, recordType: RecordType) {
-    const headers = this.getRequestHeaders()
-
-    let baseUrl = MetacriticService.BASE_URL
-    switch (recordType) {
-      case RecordType.Game:
-        baseUrl = baseUrl + 'games/'
-        break
-      case RecordType.Movie:
-        baseUrl = baseUrl + 'movies/'
-        break
-      case RecordType.TVShow:
-        baseUrl = baseUrl + 'shows/'
-        break
-      default:
-        console.error('Unsupported record type for detail request:', recordType)
-        return
+  private buildDetailUrl(slug: string, apiKey: string, recordType: RecordType): URL {
+    const path = DETAIL_PATHS[recordType]
+    if (!path) {
+      throw new ScraperError(`Unsupported record type for detail request: ${recordType}`)
     }
-
-    const detailUrl = new URL(baseUrl + encodeURI(slug) + '/web')
-
-    detailUrl.searchParams.append('apiKey', apiKey)
-
-    try {
-      const response = await fetch(detailUrl, {
-        headers: headers,
-        method: 'GET',
-        signal: AbortSignal.timeout(60000)
-      })
-
-      if (response.ok) {
-        return await response.text()
-      }
-    } catch (error) {
-      console.error('Error fetching detail result:', error)
-    }
+    const url = new URL(MetacriticService.BASE_URL + path + encodeURI(slug) + '/web')
+    url.searchParams.append('apiKey', apiKey)
+    return url
   }
+}
 
-  static getRequestHeaders() {
-    const minimumHeaders = this.getMinimalRequestHeaders()
-    return {
-      ...minimumHeaders,
-      'Content-Type': 'application/json',
-      'Accept': '*/*',
-      'Referer': MetacriticService.REFERER_HEADER,
-    }
-  }
+const REQUEST_HEADERS = {
+  'Content-Type': 'application/json',
+  Accept: '*/*',
+  Referer: MetacriticService.REFERER_HEADER,
+}
 
-  static getMinimalRequestHeaders() {
-    const userAgent = MetacriticService.USER_AGENTS[Math.floor(Math.random() * MetacriticService.USER_AGENTS.length)]
-    return {
-      'User-Agent': userAgent.toString(),
-    }
-  }
-
-  static async sendApiKeyRetrievalWebsiteRequest(): Promise<SearchInformations | null> {
-    const headers = this.getMinimalRequestHeaders()
-    try {
-      const response = await fetch(MetacriticService.HOMEPAGE_URL, {
-        headers: headers,
-        signal: AbortSignal.timeout(60000)
-      })
-
-      if (response.ok) {
-        const html = await response.text()
-
-        const scriptPattern = /<script[^>]*>([\s\S]*?)<\/script>/g
-        const scripts: string[] = []
-        let match
-        while ((match = scriptPattern.exec(html)) !== null) {
-          scripts.push(match[1])
-        }
-
-        for (const script of scripts) {
-          const searchInfo = new SearchInformations(script)
-          if (searchInfo.apiKey) {
-            return searchInfo
-          }
-        }
-      }
-
-      return null
-    } catch (error) {
-      console.error('Error fetching website:', error)
-      return null
-    }
-  }
+const DETAIL_PATHS: Partial<Record<RecordType, string>> = {
+  [RecordType.Game]: 'games/',
+  [RecordType.Movie]: 'movies/',
+  [RecordType.TVShow]: 'shows/',
 }
