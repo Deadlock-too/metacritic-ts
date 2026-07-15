@@ -1,11 +1,23 @@
-import { describe, expect, test } from '@jest/globals'
+import { beforeAll, describe, expect, test } from '@jest/globals'
 import { MetacriticService, RecordType } from '../src'
 
 // These tests hit the live Metacritic backend. They run only via the scheduled
 // CI workflow (`npm run test:integration`), not as part of `npm test`.
+//
+// A single service instance is shared across the suite on purpose: the service
+// caches the Metacritic API key per instance, so reusing it scrapes the
+// homepage once instead of once per test. Spinning up a fresh service for every
+// test fired a burst of homepage requests that Metacritic's edge rate-limited on
+// CI, surfacing as flaky "Failed to retrieve API key" failures.
+let service: MetacriticService
+
+beforeAll(() => {
+  service = new MetacriticService()
+})
+
 describe('Integration – MetacriticService search', () => {
   test('searches game data on Metacritic', async () => {
-    const result = await new MetacriticService().search('Elden Ring', { recordType: RecordType.Game })
+    const result = await service.search('Elden Ring', { recordType: RecordType.Game })
     expect(result.success).toBe(true)
     if (!result.success) throw new Error(result.error)
 
@@ -18,7 +30,7 @@ describe('Integration – MetacriticService search', () => {
   })
 
   test('searches TV show data on Metacritic', async () => {
-    const result = await new MetacriticService().search('Breaking Bad', { recordType: RecordType.TVShow })
+    const result = await service.search('Breaking Bad', { recordType: RecordType.TVShow })
     expect(result.success).toBe(true)
     if (!result.success) throw new Error(result.error)
     expect(result.data[0].recordType).toBe(RecordType.TVShow)
@@ -26,7 +38,7 @@ describe('Integration – MetacriticService search', () => {
   })
 
   test('returns an empty result set for an unknown title', async () => {
-    const result = await new MetacriticService().search('ThisGameDoesNotExistAndShouldNotBeFound', {
+    const result = await service.search('ThisGameDoesNotExistAndShouldNotBeFound', {
       recordType: RecordType.Game,
     })
     expect(result.success).toBe(true)
@@ -37,7 +49,7 @@ describe('Integration – MetacriticService search', () => {
 
 describe('Integration – MetacriticService getDetail', () => {
   test('fetches game detail from Metacritic', async () => {
-    const result = await new MetacriticService().getDetail('Elden Ring', RecordType.Game)
+    const result = await service.getDetail('Elden Ring', RecordType.Game)
     expect(result.success).toBe(true)
     if (!result.success) throw new Error(result.error)
     expect(result.data).not.toBeNull()
@@ -52,7 +64,7 @@ describe('Integration – MetacriticService getDetail', () => {
   })
 
   test('fails when no entry matches', async () => {
-    const result = await new MetacriticService().getDetail('ThisGameDoesNotExistAndShouldNotBeFound', RecordType.Game)
+    const result = await service.getDetail('ThisGameDoesNotExistAndShouldNotBeFound', RecordType.Game)
     expect(result).toEqual({ success: false, error: 'No matching entry found' })
   })
 })
