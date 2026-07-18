@@ -21,13 +21,13 @@ export interface MetacriticDetailOptions {
   signal?: AbortSignal
 }
 
-const API_KEY_PATTERN = /apiKey=([^"&]+)/
-
 export class MetacriticService extends BaseScraperService {
-  private apiKey?: string
-  private apiKeyPromise?: Promise<string | null>
-
   static REFERER_HEADER = 'https://www.metacritic.com/'
+  /**
+   * @deprecated No longer used. The Metacritic backend does not require an API
+   * key, so the homepage is never fetched. Kept for backwards compatibility and
+   * scheduled for removal in the next major release.
+   */
   static HOMEPAGE_URL = 'https://www.metacritic.com/'
   static BASE_URL = 'https://backend.metacritic.com/composer/metacritic/pages/'
   static SEARCH_URL = MetacriticService.BASE_URL + 'search/'
@@ -42,16 +42,11 @@ export class MetacriticService extends BaseScraperService {
     }
 
     try {
-      const response = await this.requestWithApiKey(
-        (apiKey) =>
-          this.http.request(
-            this.buildSearchUrl(searchKey, apiKey, options.recordType),
-            { headers: REQUEST_HEADERS },
-            options.signal,
-          ),
+      const response = await this.http.request(
+        this.buildSearchUrl(searchKey, options.recordType),
+        { headers: REQUEST_HEADERS },
         options.signal,
       )
-      if (response === null) return fail('Failed to retrieve API key')
       if (!response.ok) return fail(`Search request failed with status ${response.status}`)
 
       const body = await response.text()
@@ -92,16 +87,11 @@ export class MetacriticService extends BaseScraperService {
 
     const top = searchResult.data[0]
     try {
-      const response = await this.requestWithApiKey(
-        (apiKey) =>
-          this.http.request(
-            this.buildDetailUrl(top.slug, apiKey, recordType),
-            { headers: REQUEST_HEADERS },
-            options.signal,
-          ),
+      const response = await this.http.request(
+        this.buildDetailUrl(top.slug, recordType),
+        { headers: REQUEST_HEADERS },
         options.signal,
       )
-      if (response === null) return fail('Failed to retrieve API key')
       if (!response.ok) return fail(`Detail request failed with status ${response.status}`)
 
       const body = await response.text()
@@ -112,84 +102,20 @@ export class MetacriticService extends BaseScraperService {
     }
   }
 
-  /**
-   * Runs a request that needs the (cached) Metacritic API key. If the request
-   * is rejected with an auth error, the key is refreshed once and the request
-   * retried — this transparently recovers from key rotation/expiry.
-   */
-  private async requestWithApiKey(
-    run: (apiKey: string) => Promise<Response>,
-    signal?: AbortSignal,
-  ): Promise<Response | null> {
-    let apiKey = await this.getApiKey(signal)
-    if (!apiKey) return null
-
-    let response = await run(apiKey)
-    if (response.status === 401 || response.status === 403) {
-      apiKey = await this.getApiKey(signal, true)
-      if (!apiKey) return null
-      response = await run(apiKey)
-    }
-    return response
-  }
-
-  /**
-   * Returns the cached API key, fetching it if necessary. Concurrent callers
-   * share a single in-flight request rather than each hitting the homepage.
-   */
-  private async getApiKey(signal?: AbortSignal, forceRefresh = false): Promise<string | null> {
-    if (forceRefresh) this.apiKey = undefined
-    if (this.apiKey) return this.apiKey
-
-    if (!this.apiKeyPromise) {
-      this.apiKeyPromise = this.fetchApiKey(signal)
-        .then((key) => {
-          this.apiKey = key ?? undefined
-          return key
-        })
-        .finally(() => {
-          this.apiKeyPromise = undefined
-        })
-    }
-    return this.apiKeyPromise
-  }
-
-  private async fetchApiKey(signal?: AbortSignal): Promise<string | null> {
-    try {
-      const response = await this.http.request(MetacriticService.HOMEPAGE_URL, {}, signal)
-      if (!response.ok) return null
-
-      const html = await response.text()
-      const scriptPattern = /<script[^>]*>([\s\S]*?)<\/script>/g
-      let match: RegExpExecArray | null
-      while ((match = scriptPattern.exec(html)) !== null) {
-        const keyMatch = match[1].match(API_KEY_PATTERN)
-        if (keyMatch) return keyMatch[1]
-      }
-      return null
-    } catch (error) {
-      this.logger.error('Error fetching API key:', error)
-      return null
-    }
-  }
-
-  private buildSearchUrl(searchKey: string, apiKey: string, recordType?: RecordType): URL {
+  private buildSearchUrl(searchKey: string, recordType?: RecordType): URL {
     const url = new URL(MetacriticService.SEARCH_URL + encodeURI(searchKey) + '/web')
-    url.searchParams.append('apiKey', apiKey)
     if (recordType) {
       url.searchParams.append('mcoTypeId', recordType.toString())
     }
     return url
   }
 
-  private buildDetailUrl(slug: string, apiKey: string, recordType: RecordType): URL {
+  private buildDetailUrl(slug: string, recordType: RecordType): URL {
     const path = DETAIL_PATHS[recordType]
     if (!path) {
       throw new ScraperError(`Unsupported record type for detail request: ${recordType}`)
     }
-    const url = new URL(MetacriticService.BASE_URL + path + encodeURI(slug) + '/web')
-    url.searchParams.append('apiKey', apiKey)
-    return url
+    return new URL(MetacriticService.BASE_URL + path + encodeURI(slug) + '/web')
   }
 }
 
