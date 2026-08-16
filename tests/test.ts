@@ -4,10 +4,30 @@ import { MetacriticService, RecordType, ScraperError } from '../src'
 import { getMatchScore, getSimilarity } from '../src'
 import { parseDetailJsonResult, parseSearchJsonResult } from '../src/lib/parser'
 import { normalize } from '../src/lib/utils'
-import { HttpClient, type FetchLike, clampSimilarity } from '@deadlock-too/scrape-kit'
+import { HttpClient, HttpError, type FetchLike, clampSimilarity } from '@deadlock-too/scrape-kit'
 
 const searchFixture = readFileSync('tests/fixtures/search-response.json', 'utf8')
 const detailFixture = readFileSync('tests/fixtures/detail-response.json', 'utf8')
+
+/**
+ * Reproduces the shape `fetch` gives a socket failure: a bare
+ * `TypeError: fetch failed` whose `cause` carries the real errno. Building it
+ * by hand keeps the unit suite off the network while still exercising the
+ * chain-walking that a real failure requires.
+ */
+function fetchFailure(code: string): TypeError {
+  const cause = Object.assign(new Error(`connect ${code} 127.0.0.1:1`), { code })
+  return Object.assign(new TypeError('fetch failed'), { cause })
+}
+
+/** A fetch double that never settles until its `init.signal` aborts. */
+const hangingFetch: FetchLike = (_input, init) =>
+  new Promise<Response>((_resolve, reject) => {
+    const signal = init?.signal
+    if (!signal) return
+    if (signal.aborted) return reject(signal.reason)
+    signal.addEventListener('abort', () => reject(signal.reason), { once: true })
+  })
 
 const isHomepage = (u: string) => u.startsWith('https://www.metacritic.com')
 const isSearch = (u: string) => u.includes('backend.metacritic.com') && u.includes('/search/')
@@ -32,7 +52,7 @@ const happyHandler =
 describe('MetacriticService – search', () => {
   test('rejects an empty search key', async () => {
     const result = await new MetacriticService().search('')
-    expect(result).toEqual({ success: false, error: 'Search key is required' })
+    expect(result).toEqual({ success: false, error: 'Search key is required', kind: 'input' })
   })
 
   test('returns parsed, similarity-sorted results', async () => {
@@ -61,18 +81,224 @@ describe('MetacriticService – search', () => {
 
   test('surfaces a clear error when the search request fails', async () => {
     const result = await makeService(() => new Response('', { status: 500 })).search('The Last of Us')
-    expect(result).toEqual({ success: false, error: 'Search request failed with status 500' })
+    expect(result).toEqual({
+      success: false,
+      error: 'Search request failed with status 500',
+      kind: 'http',
+      status: 500,
+    })
+  })
+})
+
+/**
+ * The point of these is the `kind`, not the fact of failure. A consumer has to
+ * be able to answer "is Metacritic down, or has it changed shape and broken
+ * this library?" without matching on message wording, so every case below
+ * asserts the discriminator.
+ */
+describe('MetacriticService – failure classification', () => {
+  describe('the source could not be reached', () => {
+    test('a refused connection reports transport, not a fetch-flavoured catch-all', async () => {
+      const service = new MetacriticService({
+        fetch: async () => {
+          throw fetchFailure('ECONNREFUSED')
+        },
+        retries: 0,
+      })
+      const result = await service.search('The Last of Us')
+      expect(result).toEqual({
+        success: false,
+        error: 'Could not reach Metacritic (network error)',
+        kind: 'transport',
+      })
+    })
+
+    test('a DNS failure reports transport', async () => {
+      const service = new MetacriticService({
+        fetch: async () => {
+          throw fetchFailure('ENOTFOUND')
+        },
+        retries: 0,
+      })
+      const result = await service.search('The Last of Us')
+      expect(result.success).toBe(false)
+      if (result.success) throw new Error('expected failure')
+      expect(result.kind).toBe('transport')
+    })
+
+    test('a caller abort reports aborted', async () => {
+      const service = new MetacriticService({ fetch: hangingFetch, retries: 0 })
+      const controller = new AbortController()
+      const promise = service.search('The Last of Us', { signal: controller.signal })
+      queueMicrotask(() => controller.abort())
+
+      const result = await promise
+      expect(result).toEqual({
+        success: false,
+        error: 'The Metacritic request was aborted by the caller',
+        kind: 'aborted',
+      })
+    })
+
+    test("the client's own per-request timeout reports timeout", async () => {
+      const service = new MetacriticService({ fetch: hangingFetch, retries: 0, timeout: 5 })
+      const result = await service.search('The Last of Us')
+      expect(result).toEqual({
+        success: false,
+        error: 'The Metacritic request timed out',
+        kind: 'timeout',
+      })
+    })
+
+    test('getDetail classifies a transport failure on the detail leg', async () => {
+      const service = new MetacriticService({
+        fetch: async (input) => {
+          if (isSearch(String(input))) return new Response(searchFixture)
+          throw fetchFailure('ECONNRESET')
+        },
+        retries: 0,
+      })
+      const result = await service.getDetail('The Last of Us Part II', RecordType.Game)
+      expect(result).toEqual({
+        success: false,
+        error: 'Could not reach Metacritic (network error)',
+        kind: 'transport',
+      })
+    })
   })
 
-  test('reports a generic failure when the search request throws a non-ScraperError', async () => {
-    const service = new MetacriticService({
-      fetch: async () => {
-        throw new Error('socket hang up')
-      },
-      retries: 0,
+  describe('the source answered with an error status', () => {
+    test('a 403 on the search endpoint carries the status', async () => {
+      const result = await makeService(() => new Response('', { status: 403 })).search('The Last of Us')
+      expect(result).toEqual({
+        success: false,
+        error: 'Search request failed with status 403',
+        kind: 'http',
+        status: 403,
+      })
     })
-    const result = await service.search('The Last of Us')
-    expect(result).toEqual({ success: false, error: 'Failed to fetch search results' })
+
+    test('a 5xx on the detail endpoint carries the status', async () => {
+      const service = makeService((url) =>
+        isSearch(url) ? new Response(searchFixture) : new Response('', { status: 503 }),
+      )
+      const result = await service.getDetail('The Last of Us Part II', RecordType.Game)
+      expect(result).toEqual({
+        success: false,
+        error: 'Detail request failed with status 503',
+        kind: 'http',
+        status: 503,
+      })
+    })
+  })
+
+  describe('the source answered, but unreadably', () => {
+    test('a 200 whose body is not JSON reports parse', async () => {
+      const result = await makeService(() => new Response('<!doctype html><html lang="en"></html>')).search(
+        'The Last of Us',
+      )
+      expect(result).toEqual({
+        success: false,
+        error: 'Failed to parse the Metacritic response as JSON',
+        kind: 'parse',
+      })
+    })
+
+    test('a 200 whose JSON is missing the search component reports parse', async () => {
+      const result = await makeService(() => new Response(JSON.stringify({ components: [] }))).search('The Last of Us')
+      expect(result.success).toBe(false)
+      if (result.success) throw new Error('expected failure')
+      expect(result.kind).toBe('parse')
+      expect(result.error).toMatch(/structure may have changed/)
+    })
+
+    test('a 200 whose items are not an array reports parse', async () => {
+      const bad = JSON.stringify({ components: [{ meta: { componentName: 'search' }, data: { items: null } }] })
+      const result = await makeService(() => new Response(bad)).search('The Last of Us')
+      expect(result.success).toBe(false)
+      if (result.success) throw new Error('expected failure')
+      expect(result.kind).toBe('parse')
+    })
+
+    // This is the case the old catch-all got backwards: walking a payload whose
+    // shape moved throws a bare TypeError, which the previous code reported as
+    // "Failed to fetch search results".
+    test('a component present but shaped wrong reports parse, not a fetch failure', async () => {
+      const bad = JSON.stringify({ components: [{ meta: { componentName: 'search' } }] })
+      const result = await makeService(() => new Response(bad)).search('The Last of Us')
+      expect(result).toEqual({
+        success: false,
+        error: 'Failed to parse the Metacritic response (the site structure may have changed)',
+        kind: 'parse',
+      })
+    })
+
+    test('a detail payload shaped wrong reports parse', async () => {
+      const bad = JSON.stringify({ components: [{ meta: { componentName: 'product' } }] })
+      const service = makeService((url) => (isSearch(url) ? new Response(searchFixture) : new Response(bad)))
+      const result = await service.getDetail('The Last of Us Part II', RecordType.Game)
+      expect(result.success).toBe(false)
+      if (result.success) throw new Error('expected failure')
+      expect(result.kind).toBe('parse')
+    })
+  })
+
+  describe('everything else', () => {
+    test('nothing matching reports notFound — an outcome, not a malfunction', async () => {
+      const empty = JSON.stringify({ components: [{ meta: { componentName: 'search' }, data: { items: [] } }] })
+      const result = await makeService(happyHandler(empty)).getDetail('Nothing Here', RecordType.Game)
+      expect(result).toEqual({ success: false, error: 'No matching entry found', kind: 'notFound' })
+    })
+
+    test('an unsupported record type reports input, not a site change', async () => {
+      const result = await makeService(happyHandler()).getDetail('The Last of Us Part II', 99 as RecordType)
+      expect(result.success).toBe(false)
+      if (result.success) throw new Error('expected failure')
+      expect(result.kind).toBe('input')
+      expect(result.error).toMatch(/Unsupported record type/)
+    })
+
+    test('an unattributable throw during the request reports unknown rather than guessing', async () => {
+      const service = new MetacriticService({
+        fetch: async () => {
+          throw new Error('socket hang up')
+        },
+        retries: 0,
+      })
+      const result = await service.search('The Last of Us')
+      expect(result).toEqual({
+        success: false,
+        error: 'The Metacritic request failed for an unknown reason',
+        kind: 'unknown',
+      })
+    })
+
+    test('getDetail forwards the search failure whole, discriminator included', async () => {
+      const service = makeService((url) =>
+        isSearch(url) ? new Response('', { status: 403 }) : new Response(detailFixture),
+      )
+      const result = await service.getDetail('The Last of Us Part II', RecordType.Game)
+      expect(result).toEqual({
+        success: false,
+        error: 'Search request failed with status 403',
+        kind: 'http',
+        status: 403,
+      })
+    })
+
+    test('the failure survives a JSON round trip, which a thrown Error would not', async () => {
+      const result = await makeService(() => new Response('', { status: 403 })).search('The Last of Us')
+      expect(JSON.parse(JSON.stringify(result))).toEqual({
+        success: false,
+        error: 'Search request failed with status 403',
+        kind: 'http',
+        status: 403,
+      })
+    })
+  })
+
+  test('the thrown HttpError is still a ScraperError, so existing catches match', () => {
+    expect(new HttpError('boom', 403)).toBeInstanceOf(ScraperError)
   })
 })
 
@@ -90,9 +316,14 @@ describe('MetacriticService – searchOne', () => {
     expect(result).toEqual({ success: true, data: null })
   })
 
-  test('propagates a search failure', async () => {
+  test('propagates a search failure with its discriminator intact', async () => {
     const result = await makeService(() => new Response('', { status: 500 })).searchOne('The Last of Us')
-    expect(result).toEqual({ success: false, error: 'Search request failed with status 500' })
+    expect(result).toEqual({
+      success: false,
+      error: 'Search request failed with status 500',
+      kind: 'http',
+      status: 500,
+    })
   })
 })
 
@@ -157,27 +388,7 @@ describe('MetacriticService – getDetail', () => {
 
   test('rejects an empty search key', async () => {
     const result = await new MetacriticService().getDetail('', RecordType.Game)
-    expect(result).toEqual({ success: false, error: 'Search key is required' })
-  })
-
-  test('propagates a failure from the underlying search', async () => {
-    const result = await makeService((url) =>
-      isSearch(url) ? new Response('', { status: 500 }) : new Response(detailFixture),
-    ).getDetail('The Last of Us Part II', RecordType.Game)
-    expect(result).toEqual({ success: false, error: 'Search request failed with status 500' })
-  })
-
-  test('fails when no entry matches', async () => {
-    const empty = JSON.stringify({ components: [{ meta: { componentName: 'search' }, data: { items: [] } }] })
-    const result = await makeService(happyHandler(empty)).getDetail('Nothing Here', RecordType.Game)
-    expect(result).toEqual({ success: false, error: 'No matching entry found' })
-  })
-
-  test('fails clearly on an unsupported record type', async () => {
-    const result = await makeService(happyHandler()).getDetail('The Last of Us Part II', 99 as RecordType)
-    expect(result.success).toBe(false)
-    if (result.success) throw new Error('expected failure')
-    expect(result.error).toMatch(/Unsupported record type/)
+    expect(result).toEqual({ success: false, error: 'Search key is required', kind: 'input' })
   })
 
   test('surfaces a clear error when the detail request fails', async () => {
@@ -185,19 +396,12 @@ describe('MetacriticService – getDetail', () => {
       isSearch(url) ? new Response(searchFixture) : new Response('', { status: 500 }),
     )
     const result = await service.getDetail('The Last of Us Part II', RecordType.Game)
-    expect(result).toEqual({ success: false, error: 'Detail request failed with status 500' })
-  })
-
-  test('reports a generic failure when the detail request throws a non-ScraperError', async () => {
-    const service = new MetacriticService({
-      fetch: async (input) => {
-        if (isSearch(String(input))) return new Response(searchFixture)
-        throw new Error('socket hang up')
-      },
-      retries: 0,
+    expect(result).toEqual({
+      success: false,
+      error: 'Detail request failed with status 500',
+      kind: 'http',
+      status: 500,
     })
-    const result = await service.getDetail('The Last of Us Part II', RecordType.Game)
-    expect(result).toEqual({ success: false, error: 'Failed to fetch detail result' })
   })
 })
 

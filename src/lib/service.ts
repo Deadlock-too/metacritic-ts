@@ -1,6 +1,17 @@
 import { parseDetailJsonResult, parseSearchJsonResult } from './parser'
 import { DetailResult, RecordType, SearchEntryResult, SearchResult } from './types'
-import { BaseScraperService, ScraperOptions, ScraperError, fail, ok } from '@deadlock-too/scrape-kit'
+import {
+  BaseScraperService,
+  HttpError,
+  ScraperOptions,
+  ScraperError,
+  fail,
+  failFrom,
+  ok,
+} from '@deadlock-too/scrape-kit'
+
+/** Names the remote source in generated failure messages. */
+const SUBJECT = 'Metacritic'
 
 export interface MetacriticSearchOptions {
   /** Restrict results to a single record type (game / movie / TV show). */
@@ -38,22 +49,32 @@ export class MetacriticService extends BaseScraperService {
 
   async search(searchKey: string, options: MetacriticSearchOptions = {}): Promise<SearchResult> {
     if (!searchKey) {
-      return fail('Search key is required')
+      return fail('Search key is required', { kind: 'input' })
     }
 
+    // Fetching and parsing are caught separately: collapsing them into one
+    // `try` is what let a shape change report itself as a fetch failure.
+    let body: string
     try {
       const response = await this.http.request(
         this.buildSearchUrl(searchKey, options.recordType),
         { headers: REQUEST_HEADERS },
         options.signal,
       )
-      if (!response.ok) return fail(`Search request failed with status ${response.status}`)
+      if (!response.ok) {
+        throw new HttpError(`Search request failed with status ${response.status}`, response.status)
+      }
+      body = await response.text()
+    } catch (error) {
+      this.logger.error('Metacritic search request failed:', error)
+      return failFrom(error, SUBJECT)
+    }
 
-      const body = await response.text()
+    try {
       return ok(parseSearchJsonResult(body, searchKey, this.minSimilarity, options.sortBySimilarity ?? true))
     } catch (error) {
-      this.logger.error('Error during search:', error)
-      return fail(error instanceof ScraperError ? error.message : 'Failed to fetch search results')
+      this.logger.error('Failed to parse the Metacritic search response:', error)
+      return failFrom(error, SUBJECT, 'parse')
     }
   }
 
@@ -70,7 +91,7 @@ export class MetacriticService extends BaseScraperService {
     options: MetacriticDetailOptions = {},
   ): Promise<DetailResult> {
     if (!searchKey) {
-      return fail('Search key is required')
+      return fail('Search key is required', { kind: 'input' })
     }
 
     const searchResult = await this.search(searchKey, {
@@ -78,27 +99,37 @@ export class MetacriticService extends BaseScraperService {
       sortBySimilarity: options.sortBySimilarity ?? true,
       signal: options.signal,
     })
+    // Returned whole rather than rebuilt from `error`, which would drop the
+    // classification the search had already worked out.
     if (!searchResult.success) {
-      return fail(searchResult.error)
+      return searchResult
     }
     if (searchResult.data.length === 0) {
-      return fail('No matching entry found')
+      return fail('No matching entry found', { kind: 'notFound' })
     }
 
     const top = searchResult.data[0]
+    let body: string
     try {
       const response = await this.http.request(
         this.buildDetailUrl(top.slug, recordType),
         { headers: REQUEST_HEADERS },
         options.signal,
       )
-      if (!response.ok) return fail(`Detail request failed with status ${response.status}`)
+      if (!response.ok) {
+        throw new HttpError(`Detail request failed with status ${response.status}`, response.status)
+      }
+      body = await response.text()
+    } catch (error) {
+      this.logger.error('Metacritic detail request failed:', error)
+      return failFrom(error, SUBJECT)
+    }
 
-      const body = await response.text()
+    try {
       return ok(parseDetailJsonResult(body, top.must))
     } catch (error) {
-      this.logger.error('Error during getDetail:', error)
-      return fail(error instanceof ScraperError ? error.message : 'Failed to fetch detail result')
+      this.logger.error('Failed to parse the Metacritic detail response:', error)
+      return failFrom(error, SUBJECT, 'parse')
     }
   }
 
@@ -113,7 +144,9 @@ export class MetacriticService extends BaseScraperService {
   private buildDetailUrl(slug: string, recordType: RecordType): URL {
     const path = DETAIL_PATHS[recordType]
     if (!path) {
-      throw new ScraperError(`Unsupported record type for detail request: ${recordType}`)
+      // The caller passed a record type with no detail endpoint — an argument
+      // problem, not a sign that Metacritic changed shape.
+      throw new ScraperError(`Unsupported record type for detail request: ${recordType}`, undefined, 'input')
     }
     return new URL(MetacriticService.BASE_URL + path + encodeURI(slug) + '/web')
   }
