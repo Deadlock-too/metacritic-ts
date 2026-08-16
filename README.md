@@ -18,7 +18,7 @@ This library takes inspiration from another library of mine [howlongtobeat-ts](h
 - Search for games, movies and tv shows on Metacritic
 - Retrieve rating data (critic and user scores) for games, movies and tv shows
 - Resilient networking: configurable timeouts, retries with backoff, `429` handling, an injectable `fetch` and `AbortSignal` support
-- Automatic API-key caching, shared across concurrent calls and refreshed on auth failure
+- Failures carry a machine-readable `kind`, so you can tell a Metacritic outage from a change that broke this library
 - Fully typed, with a discriminated-union result type and zero `console` noise
 
 ## Installation
@@ -53,6 +53,53 @@ if (detail.success && detail.data) {
   console.log(detail.data.criticScore.score, detail.data.userScore.score)
 }
 ```
+
+### Handling failures
+
+Every failure carries an optional `kind` alongside `error`. Branch on `kind` — `error` is prose for humans and its wording may change between releases.
+
+```typescript
+const detail = await metacritic.getDetail('The Last of Us Part II', RecordType.Game)
+if (!detail.success) {
+  switch (detail.kind) {
+    case 'notFound':
+      // Nothing is broken — Metacritic has no matching entry.
+      break
+    case 'transport':
+    case 'timeout':
+      // Could not reach Metacritic at all — a retry may well succeed.
+      break
+    case 'http':
+      // Metacritic answered with an error status; `status` is set.
+      console.error(`Metacritic returned ${detail.status}`)
+      break
+    case 'parse':
+      // Metacritic answered, but the response could not be read: the site has
+      // most likely changed shape. Please open an issue on this repo.
+      break
+    case 'aborted':
+      // Your own AbortSignal fired.
+      break
+    case 'input':
+      // The arguments were rejected — an empty key, or a record type with no
+      // detail endpoint.
+      break
+  }
+}
+```
+
+| `kind`      | What happened                                              | Where the fix lives |
+| ----------- | ---------------------------------------------------------- | ------------------- |
+| `input`     | Arguments rejected                                         | your call site      |
+| `transport` | The round trip never completed — DNS, refused, reset, TLS  | the network         |
+| `timeout`   | The per-request deadline elapsed                           | the network         |
+| `aborted`   | Your `AbortSignal` fired                                   | your call site      |
+| `http`      | Metacritic answered with a non-2xx status (see `status`)   | Metacritic          |
+| `parse`     | The response could not be understood                       | this library        |
+| `notFound`  | The search matched nothing, so there is no detail to fetch | nobody              |
+| `unknown`   | Could not be attributed to any of the above                | —                   |
+
+Note that `search` itself never reports `notFound`: a search matching nothing succeeds with an empty array, and `searchOne` succeeds with `null`. Only `getDetail` reports it, because it has no entry to look up.
 
 ### Configuration
 
@@ -90,9 +137,14 @@ controller.abort()
 Discriminated unions:
 
 ```typescript
-type SearchResult = { success: true; data: MetacriticSearchEntry[] } | { success: false; error: string }
-type DetailResult = { success: true; data: MetacriticEntry | null } | { success: false; error: string }
+type FailureKind = 'input' | 'transport' | 'timeout' | 'aborted' | 'http' | 'parse' | 'notFound' | 'unknown'
+type Failure = { success: false; error: string; kind?: FailureKind; status?: number }
+
+type SearchResult = { success: true; data: MetacriticSearchEntry[] } | Failure
+type DetailResult = { success: true; data: MetacriticEntry | null } | Failure
 ```
+
+`error` is always present. `kind` is always set by this library, and `status` is set whenever `kind` is `'http'`. Both are typed as optional because they come from the shared [`@deadlock-too/scrape-kit`](https://github.com/Deadlock-too/scrape-kit) `Failure`, where they were added without breaking older producers.
 
 ### `RecordType`
 
